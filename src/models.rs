@@ -35,7 +35,14 @@ pub enum Request{
 #[derive(Debug, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "r")]
 pub enum Response{
+    #[allow(non_camel_case_types)]
+    get_nodes(GetNodesReponse),
 
+    #[allow(non_camel_case_types)]
+    get_amount(GetAmountReponse),
+
+    #[allow(non_camel_case_types)]
+    get_transaction(GetTransactionResponse)
 }
 
 #[derive(Debug, PartialEq, Deserialize, Serialize)]
@@ -45,10 +52,20 @@ pub struct ErrorR{
 
 
 #[derive(Debug, PartialEq, Deserialize, Serialize)]
-pub struct GetNodes{
-
+pub struct GetNodesReponse{
+    ipv4: Option<Vec<u8>>,
+    ipv6: Option<Vec<u8>>
 }
 
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
+pub struct GetAmountReponse{
+    ipv4: Option<Vec<u8>>
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
+pub struct GetTransactionResponse{
+    transaction: Vec<u8>
+}
 
 #[cfg(test)]
 mod packet_tests{
