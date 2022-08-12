@@ -29,7 +29,7 @@ pub struct Peer {
     last_response: u64,
 }
 
-struct Node {
+pub struct Node {
     peers: HashSet<SocketAddr>,
     listener: TcpListener,
 }
@@ -53,6 +53,20 @@ impl Node {
 
         let peers =
             peers_dump::Peers::deserialize(&mut Deserializer::new(Cursor::new(decoded_data)))?;
+
+        if let Some(dump) = peers.ipv4{
+            let parsed = parse_ipv4(&dump)?;
+            for addr in parsed{
+                self.peers.insert(addr);
+            }
+        }
+
+        if let Some(dump) = peers.ipv6{
+            let parsed = parse_ipv6(&dump)?;
+            for addr in parsed{
+                self.peers.insert(addr);
+            }
+        }
 
         Ok(())
     }

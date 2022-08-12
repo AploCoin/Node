@@ -100,8 +100,8 @@ pub mod peers_dump {
 
     #[derive(Debug, Deserialize, Serialize)]
     pub struct Peers {
-        ipv4: Option<Vec<u8>>,
-        ipv6: Option<Vec<u8>>,
+        pub ipv4: Option<Vec<u8>>,
+        pub ipv6: Option<Vec<u8>>,
     }
 }
 
