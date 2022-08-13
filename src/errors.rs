@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+pub type ResultSmall<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 pub mod models_errors {
     use super::*;
@@ -26,6 +26,17 @@ pub mod node_errors {
     impl GetRandomError {
         pub fn new(e: grandErr) -> GetRandomError {
             GetRandomError { e }
+        }
+    }
+
+    #[derive(Debug, Clone, Error)]
+    #[error("Node error: {:?}", self.e)]
+    pub struct NodeError {
+        pub e: String,
+    }
+    impl NodeError {
+        pub fn new(e: String) -> NodeError {
+            NodeError { e }
         }
     }
 }

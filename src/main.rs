@@ -7,10 +7,10 @@ mod tools;
 use tokio::sync::broadcast;
 
 #[tokio::main]
-async fn main() -> errors::Result<()> {
+async fn main() -> errors::ResultSmall<()> {
     let (tx, mut rx) = broadcast::channel::<u8>(1);
 
-    let mut nd = node::Node::new("0.0.0.0:5050").await?;
+    let mut nd = node::Node::new("0.0.0.0:5050", tx.clone()).await?;
 
     match nd.load_peers() {
         Ok(_) => {
@@ -22,6 +22,10 @@ async fn main() -> errors::Result<()> {
     }
 
     nd.start().await?;
+
+    // waiting for tasks to finish
+    drop(tx);
+    let _ = rx.recv().await;
 
     match nd.dump_peers() {
         Ok(_) => {

@@ -1,3 +1,5 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
 #[macro_export]
 macro_rules! box_array {
     ($val:expr ; $len:expr) => {{
@@ -14,4 +16,9 @@ macro_rules! box_array {
     }};
 }
 
-// reliability factor:
+pub fn current_time() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+}

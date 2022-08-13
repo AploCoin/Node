@@ -142,7 +142,7 @@ pub fn dump_addresses(addrs: &[SocketAddr]) -> (Option<Vec<u8>>, Option<Vec<u8>>
     (ipv4_to_return, ipv6_to_return)
 }
 
-pub fn parse_ipv4(data: &[u8]) -> Result<Vec<SocketAddr>> {
+pub fn parse_ipv4(data: &[u8]) -> ResultSmall<Vec<SocketAddr>> {
     if data.len() % 6 != 0 {
         return Err(models_errors::WrongSizeIPv4.into());
     }
@@ -165,7 +165,7 @@ pub fn parse_ipv4(data: &[u8]) -> Result<Vec<SocketAddr>> {
     Ok(to_return)
 }
 
-pub fn parse_ipv6(data: &[u8]) -> Result<Vec<SocketAddr>> {
+pub fn parse_ipv6(data: &[u8]) -> ResultSmall<Vec<SocketAddr>> {
     if data.len() % 18 != 0 {
         return Err(models_errors::WrongSizeIPv6.into());
     }
