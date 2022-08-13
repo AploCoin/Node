@@ -34,14 +34,16 @@ pub struct Node {
     peers: HashSet<SocketAddr>,
     listener: TcpListener,
     shutdown: Sender<u8>,
+    propagate: Sender<Vec<u8>>
 }
 
 impl Node {
-    pub async fn new(addr: &str, shutdown: Sender<u8>) -> ResultSmall<Node> {
+    pub async fn new(addr: &str, shutdown: Sender<u8>, propagate:Sender<Vec<u8>>) -> ResultSmall<Node> {
         Ok(Node {
             listener: TcpListener::bind(addr).await?,
             peers: HashSet::with_capacity(100),
             shutdown,
+            propagate
         })
     }
 
@@ -121,7 +123,7 @@ impl Node {
 
             self.peers.insert(addr);
 
-            tokio::spawn(Node::handle_incoming(sock, self.shutdown.clone()));
+            tokio::spawn(Node::handle_incoming(sock, self.shutdown.clone(), self.propagate.clone()));
         }
 
         Ok(())
@@ -130,9 +132,51 @@ impl Node {
     async fn handle_incoming(
         mut socket: TcpStream,
         shutdown: Sender<u8>,
+        propagate:Sender<Vec<u8>>
     ) -> Result<(), node_errors::NodeError> {
-        let (nonce, shared) = Node::exchange_keys(&mut socket).await?;
+        let mut rx = shutdown.subscribe();
+        let mut rx_propagate = propagate.subscribe();
+
+        let (nonce, shared) = tokio::select!{
+            res = Node::exchange_keys(&mut socket) => res?,
+            _ = rx.recv() => {
+                return Ok(());
+            }
+        };
         let cipher = ChaCha20::new(shared.as_bytes().into(), &nonce.into());
+
+        let mut recv_buffer_size = vec![0;4];
+
+
+        loop{
+
+            let read_size = tokio::select!{
+                _ = rx.recv() => {
+                    // stop connection
+                    break;
+                }
+                res = socket.read(&mut recv_buffer_size) => {
+                    // received data
+                    match res{
+                        Ok(s) => s,
+                        Err(e) => {
+                            return Err(node_errors::NodeError::new(e.to_string()).into());
+                        }
+                    }
+                },
+                pr = rx_propagate.recv() => {
+                    // propagate message to the client
+                    continue;
+                }
+            };
+            if read_size == 0{
+                // connection is closed
+                break;
+            }
+            
+
+        }
+
         Ok(())
     }
 

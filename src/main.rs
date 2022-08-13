@@ -9,8 +9,9 @@ use tokio::sync::broadcast;
 #[tokio::main]
 async fn main() -> errors::ResultSmall<()> {
     let (tx, mut rx) = broadcast::channel::<u8>(1);
+    let (txp, _) = broadcast::channel::<Vec<u8>>(50);
 
-    let mut nd = node::Node::new("0.0.0.0:5050", tx.clone()).await?;
+    let mut nd = node::Node::new("0.0.0.0:5050", tx.clone(), txp.clone()).await?;
 
     match nd.load_peers() {
         Ok(_) => {
