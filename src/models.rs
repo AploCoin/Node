@@ -129,18 +129,15 @@ pub fn dump_addresses(addrs: &[SocketAddr]) -> (Option<Vec<u8>>, Option<Vec<u8>>
         }
     }
 
-    
-    let ipv4_to_return = match ipv4.len(){
-        0 => {None},
-        _ => {Some(ipv4)}
+    let ipv4_to_return = match ipv4.len() {
+        0 => None,
+        _ => Some(ipv4),
     };
 
-    let ipv6_to_return = match ipv6.len(){
-        0 => {None},
-        _ => {Some(ipv6)}
+    let ipv6_to_return = match ipv6.len() {
+        0 => None,
+        _ => Some(ipv6),
     };
-
-
 
     (ipv4_to_return, ipv6_to_return)
 }

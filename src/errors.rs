@@ -14,20 +14,18 @@ pub mod models_errors {
     pub struct WrongSizeIPv6;
 }
 
-
-pub mod node_errors{
+pub mod node_errors {
     use super::*;
     use getrandom::Error as grandErr;
 
     #[derive(Debug, Clone, Error)]
     #[error("Get random failed: {:?}", self.e)]
-    pub struct GetRandomError{
-        pub e: grandErr
+    pub struct GetRandomError {
+        pub e: grandErr,
     }
-    impl GetRandomError{
-        pub fn new(e: grandErr) -> GetRandomError{
+    impl GetRandomError {
+        pub fn new(e: grandErr) -> GetRandomError {
             GetRandomError { e }
-        } 
+        }
     }
-
 }
