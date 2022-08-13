@@ -13,3 +13,21 @@ pub mod models_errors {
     #[error("The amount of bytes should be divisable by 18")]
     pub struct WrongSizeIPv6;
 }
+
+
+pub mod node_errors{
+    use super::*;
+    use getrandom::Error as grandErr;
+
+    #[derive(Debug, Clone, Error)]
+    #[error("Get random failed: {:?}", self.e)]
+    pub struct GetRandomError{
+        pub e: grandErr
+    }
+    impl GetRandomError{
+        pub fn new(e: grandErr) -> GetRandomError{
+            GetRandomError { e }
+        } 
+    }
+
+}

@@ -9,6 +9,7 @@ use getrandom::getrandom;
 use rand_core::OsRng;
 use rmp_serde::{Deserializer, Serializer};
 use serde::Deserialize;
+use serde::Serialize;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::Cursor;
@@ -16,8 +17,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret};
 use zstd;
-
-use crate::tools;
 
 const PEERS_BACKUP_FILE: &str = "peers.dump";
 
@@ -71,7 +70,65 @@ impl Node {
         Ok(())
     }
 
-    pub async fn start(&mut self) -> Result<()> {
+    pub fn dump_peers(&self) -> Result<()>{
+
+        let target = File::create(PEERS_BACKUP_FILE)?;
+
+        let mut encoder = zstd::Encoder::new(target,21)?;
+
+        let mut peers:Vec<SocketAddr> = Vec::with_capacity(self.peers.len());
+
+        for peer in (&self.peers).into_iter(){
+            peers.push(*peer);
+        }
+
+        let (ipv4,ipv6) = dump_addresses(&peers);
+
+        let mut buf: Vec<u8> = Vec::new();
+
+        let peers = peers_dump::Peers{ipv4,ipv6};
+
+        peers.serialize(&mut Serializer::new(&mut buf))?;
+
+        encoder.write_all(&buf)?;
+
+        encoder.finish()?;
+
         Ok(())
+    }
+
+    pub async fn start(&mut self) -> Result<()> {    
+        Ok(())
+    }
+    
+
+    async fn handle_incoming(socket: &mut TcpStream) -> Result<()>{
+        let (nonce, shared) = Node::exchange_keys(socket).await?;
+        let mut cipher = ChaCha20::new(shared.as_bytes().into(), &nonce.into());
+        Ok(())
+
+    }
+
+    async fn exchange_keys(socket: &mut TcpStream) -> Result<([u8;12], SharedSecret)>{
+        let mut buf = [0; 32];
+        let secret = EphemeralSecret::new(OsRng);
+        let public = PublicKey::from(&secret);
+                
+        socket.write(public.as_bytes()).await?;
+        socket.read(&mut buf).await?;
+
+        let other_public = PublicKey::from(buf);
+        let shared = secret.diffie_hellman(&other_public);
+
+        let mut nonce = [0u8;12];
+        
+        match getrandom(&mut nonce){
+            Ok(_) =>{},
+            Err(e) => {
+                return Err(node_errors::GetRandomError::new(e).into());
+            }
+        }
+
+        Ok((nonce, shared))
     }
 }

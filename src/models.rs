@@ -105,7 +105,7 @@ pub mod peers_dump {
     }
 }
 
-pub fn dump_addresses(addrs: &[SocketAddr]) -> (Vec<u8>, Vec<u8>) {
+pub fn dump_addresses(addrs: &[SocketAddr]) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
     let mut ipv4: Vec<u8> = Vec::new();
     let mut ipv6: Vec<u8> = Vec::new();
 
@@ -129,7 +129,20 @@ pub fn dump_addresses(addrs: &[SocketAddr]) -> (Vec<u8>, Vec<u8>) {
         }
     }
 
-    (ipv4, ipv6)
+    
+    let ipv4_to_return = match ipv4.len(){
+        0 => {None},
+        _ => {Some(ipv4)}
+    };
+
+    let ipv6_to_return = match ipv6.len(){
+        0 => {None},
+        _ => {Some(ipv6)}
+    };
+
+
+
+    (ipv4_to_return, ipv6_to_return)
 }
 
 pub fn parse_ipv4(data: &[u8]) -> Result<Vec<SocketAddr>> {
@@ -191,9 +204,9 @@ mod dump_parse_tests {
 
         let (ipv4, ipv6) = dump_addresses(&input);
 
-        assert_eq!(expected_ipv4, ipv4.as_slice());
+        assert_eq!(expected_ipv4, ipv4.unwrap().as_slice());
 
-        assert_eq!(expected_ipv6, ipv6.as_slice());
+        assert_eq!(expected_ipv6, ipv6.unwrap().as_slice());
     }
 
     #[test]

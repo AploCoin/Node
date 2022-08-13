@@ -13,11 +13,20 @@ async fn main() -> errors::Result<()>{
             println!("Successfuly loaded peers from the file")
         },
         Err(e) => {
-            println!("Failed to load peers from the file, due to: {}",e);
+            println!("Failed to load peers from the file, due to: {}", e);
         }
     }
 
     nd.start().await?;
+
+    match nd.dump_peers(){
+        Ok(_) =>{
+            println!("Successfuly dumped peers to the file")
+        }
+        Err(e) => {
+            println!("Failed to dump peers to the file, due to: {}", e);
+        }
+    }
 
     Ok(())
 }
