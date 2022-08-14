@@ -39,4 +39,8 @@ pub mod node_errors {
             NodeError { e }
         }
     }
+
+    #[derive(Debug, Clone, Error)]
+    #[error("Peer closed connection")]
+    pub struct ConnectionClosed {}
 }
