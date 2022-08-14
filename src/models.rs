@@ -26,9 +26,9 @@ pub mod packet_models {
 
     #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
     pub struct Request {
-        id: usize,
-        q: RequestType,
-        body: Option<Vec<u8>>,
+        pub id: u64,
+        pub q: RequestType,
+        pub body: Option<Vec<u8>>,
     }
 
     #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -62,23 +62,23 @@ pub mod packet_models {
 
     #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
     pub struct ErrorR {
-        code: ErrorCode,
+        pub code: ErrorCode,
     }
 
     #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
     pub struct GetNodesReponse {
-        ipv4: Option<Vec<u8>>,
-        ipv6: Option<Vec<u8>>,
+        pub ipv4: Option<Vec<u8>>,
+        pub ipv6: Option<Vec<u8>>,
     }
 
     #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
     pub struct GetAmountReponse {
-        amount: Option<Vec<u8>>,
+        pub amount: Option<Vec<u8>>,
     }
 
     #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
     pub struct GetTransactionResponse {
-        transaction: Vec<u8>,
+        pub transaction: Vec<u8>,
     }
 
     #[cfg(test)]
@@ -139,6 +139,31 @@ pub mod peers_dump {
         pub ipv4: Option<Vec<u8>>,
         pub ipv6: Option<Vec<u8>>,
     }
+}
+
+pub fn addr2bin(addr: &SocketAddr) -> Vec<u8> {
+    let mut to_return: Vec<u8>;
+
+    let port = addr.port();
+    match addr.ip() {
+        IpAddr::V4(ip) => {
+            to_return = Vec::with_capacity(6);
+            for byte in ip.octets() {
+                to_return.push(byte);
+            }
+        }
+        IpAddr::V6(ip) => {
+            to_return = Vec::with_capacity(18);
+            for byte in ip.octets() {
+                to_return.push(byte);
+            }
+        }
+    };
+
+    to_return.push((port >> 8) as u8);
+    to_return.push(port as u8);
+
+    to_return
 }
 
 pub fn dump_addresses(addrs: &[SocketAddr]) -> (Option<Vec<u8>>, Option<Vec<u8>>) {

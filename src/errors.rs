@@ -24,6 +24,7 @@ pub mod node_errors {
         pub e: grandErr,
     }
     impl GetRandomError {
+        #[allow(dead_code)]
         pub fn new(e: grandErr) -> GetRandomError {
             GetRandomError { e }
         }

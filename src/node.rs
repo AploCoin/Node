@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::net::SocketAddr;
+use std::str::FromStr;
 
 use chacha20::cipher::StreamCipher;
 use chacha20::cipher::StreamCipherSeek;
@@ -7,8 +8,8 @@ use tokio::sync::broadcast::Receiver;
 use tokio::sync::broadcast::Sender;
 
 use crate::errors::*;
+use crate::models;
 use crate::models::*;
-//use crate::tools::*;
 use chacha20::cipher::KeyIvInit;
 use chacha20::ChaCha20;
 use getrandom::getrandom;
@@ -121,8 +122,15 @@ pub async fn start(
 ) -> Result<(), node_errors::NodeError> {
     let mut rx = shutdown.subscribe();
 
+    let serv_addr = match SocketAddr::from_str(addr) {
+        Ok(a) => a,
+        Err(e) => {
+            return Err(node_errors::NodeError::new(e.to_string()));
+        }
+    };
+
     tokio::select! {
-        _ = connect_to_peers(peers_mut.clone(),shutdown.clone(),propagate.clone()) => {},
+        _ = connect_to_peers(serv_addr, peers_mut.clone(), shutdown.clone(),propagate.clone()) => {},
         _ = rx.recv() => {
             return Ok(());
         }
@@ -162,7 +170,7 @@ pub async fn start(
         // };
         // peers.insert(addr);
         // drop(peers);
-
+        println!("New connection from: {}",addr.to_string());
         tokio::spawn(handle_incoming(
             sock,
             addr,
@@ -185,6 +193,7 @@ async fn handle_incoming(
     let mut rx = shutdown.subscribe();
     let mut rx_propagate = propagate.subscribe();
 
+    println!("Exchanging keys");
     let (nonce, shared) = tokio::select! {
         res = exchange_keys(&mut socket) => res?,
         _ = rx.recv() => {
@@ -193,9 +202,11 @@ async fn handle_incoming(
     };
     let mut cipher = ChaCha20::new(shared.as_bytes().into(), &nonce.into());
 
+    println!("Created cipher");
+
     // main loop
     loop {
-        let _packet = tokio::select! {
+        let packet = tokio::select! {
             _ = rx.recv() => {
                 // stop connection
                 break;
@@ -211,10 +222,8 @@ async fn handle_incoming(
         };
 
         // handle packet
+        println!("{:?}", packet);
     }
-
-    let mut peers_unwrapped = peers.lock().unwrap();
-    peers_unwrapped.remove(&addr);
 
     Ok(())
 }
@@ -237,16 +246,7 @@ async fn exchange_keys(
     let other_public = PublicKey::from(buf);
     let shared = secret.diffie_hellman(&other_public);
 
-    let mut nonce = [0u8; 12];
-
-    match getrandom(&mut nonce) {
-        Ok(_) => {}
-        Err(e) => {
-            return Err(node_errors::NodeError::new(
-                node_errors::GetRandomError::new(e).to_string(),
-            ));
-        }
-    }
+    let nonce = [0u8; 12];
 
     Ok((nonce, shared))
 }
@@ -282,7 +282,33 @@ async fn receive_packet(
     Ok(packet)
 }
 
+async fn send_packet(
+    socket: &mut TcpStream,
+    cipher: &mut ChaCha20,
+    packet: packet_models::Packet,
+) -> ResultSmall<()> {
+    let mut buf: Vec<u8> = Vec::with_capacity(100);
+
+    packet.serialize(&mut Serializer::new(&mut buf)).unwrap();
+
+    let mut encoded_data: Vec<u8> = vec![0u8;buf.len()];
+    let cur = Cursor::new(&mut encoded_data);
+    let mut encoder = zstd::Encoder::new(cur, 21)?;
+    encoder.write_all(&buf)?;
+    encoder.finish()?;
+
+    cipher.apply_keystream(&mut encoded_data);
+    cipher.seek(0);
+
+    let packet_size = &(encoded_data.len() as u32).to_be_bytes();
+    socket.write_all(packet_size).await?;
+    socket.write_all(&encoded_data).await?;
+
+    Ok(())
+}
+
 async fn connect_to_peers(
+    serv_addr: SocketAddr,
     peers_mut: Arc<Mutex<HashSet<SocketAddr>>>,
     shutdown: Sender<u8>,
     propagate: Sender<Vec<u8>>,
@@ -291,6 +317,7 @@ async fn connect_to_peers(
 
     for peer in peers.iter() {
         tokio::spawn(connect_to_peer(
+            serv_addr,
             *peer,
             peers_mut.clone(),
             shutdown.clone(),
@@ -317,21 +344,13 @@ async fn exchange_keys_client(
     let other_public = PublicKey::from(buf);
     let shared = secret.diffie_hellman(&other_public);
 
-    let mut nonce = [0u8; 12];
-
-    match getrandom(&mut nonce) {
-        Ok(_) => {}
-        Err(e) => {
-            return Err(node_errors::NodeError::new(
-                node_errors::GetRandomError::new(e).to_string(),
-            ));
-        }
-    }
+    let nonce = [0u8; 12];
 
     Ok((nonce, shared))
 }
 
 pub async fn connect_to_peer(
+    serv_addr: SocketAddr,
     addr: SocketAddr,
     peers_mut: Arc<Mutex<HashSet<SocketAddr>>>,
     shutdown: Sender<u8>,
@@ -340,39 +359,68 @@ pub async fn connect_to_peer(
     let mut rx = shutdown.subscribe();
     tokio::select! {
         _ = rx.recv() => {},
-        _ = handle_peer(&addr, peers_mut, propagate) => {}
+        _ = handle_peer(&serv_addr, &addr, peers_mut.clone(), propagate) => {}
     };
+
+    let mut peers = peers_mut.lock().unwrap();
+    peers.remove(&addr);
 }
 
 pub async fn handle_peer(
+    serv_addr: &SocketAddr,
     addr: &SocketAddr,
     peers_mut: Arc<Mutex<HashSet<SocketAddr>>>,
     propagate: Sender<Vec<u8>>,
 ) -> Result<(), node_errors::NodeError> {
+    // set up
     let mut rx_propagate = propagate.subscribe();
 
     let mut socket =
         if let Ok(Ok(s)) = tokio::time::timeout(*PEER_TIMEOUT, TcpStream::connect(addr)).await {
             s
         } else {
-            // might be a bug with mutex being block forever
-            let mut peers = peers_mut.lock().unwrap();
-            peers.remove(addr);
-
             return Err(node_errors::NodeError::new("Connection error".to_string()));
         };
 
+    // get cipher
     let (nonce, shared) = match exchange_keys_client(&mut socket).await {
         Ok(d) => d,
         Err(e) => {
-            let mut peers = peers_mut.lock().unwrap();
-            peers.remove(addr);
-
             return Err(e);
         }
     };
-
     let mut cipher = ChaCha20::new(shared.as_bytes().into(), &nonce.into());
+
+    let mut waiting_reseponse: HashSet<u64> = HashSet::with_capacity(20);
+
+    // announce
+    let id: u64 = rand::random();
+
+    waiting_reseponse.insert(id);
+
+    let body = models::addr2bin(serv_addr);
+    let packet = packet_models::Packet::request(packet_models::Request {
+        id,
+        q: packet_models::RequestType::announce,
+        body: Some(body),
+    });
+
+    if let Err(e) = send_packet(&mut socket, &mut cipher, packet).await {
+        return Err(node_errors::NodeError::new(e.to_string()));
+    };
+
+    // main loop
+    loop {
+        // TODO: write select
+        let _packet = match receive_packet(&mut socket, &mut cipher, &mut rx_propagate).await {
+            Ok(p) => p,
+            Err(e) => {
+                return Err(node_errors::NodeError::new(e.to_string()));
+            }
+        };
+
+        // handle packet
+    }
 
     Ok(())
 }

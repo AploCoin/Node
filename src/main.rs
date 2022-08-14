@@ -14,7 +14,7 @@ use tokio::time::{sleep, Duration};
 #[tokio::main]
 async fn main() -> errors::ResultSmall<()> {
     let (tx, mut rx) = broadcast::channel::<u8>(1);
-    let (txp, _) = broadcast::channel::<Vec<u8>>(50);
+    let (txp, _) = broadcast::channel::<Vec<u8>>(100);
 
     let peers: Arc<Mutex<HashSet<SocketAddr>>> = Arc::new(Mutex::new(HashSet::with_capacity(100)));
 
@@ -45,7 +45,7 @@ async fn main() -> errors::ResultSmall<()> {
         }
     }
 
-    match node::dump_peers(peers.clone()) {
+    match node::dump_peers(peers) {
         Ok(_) => {
             println!("Successfuly dumped peers to the file")
         }
