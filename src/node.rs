@@ -170,7 +170,7 @@ pub async fn start(
         // };
         // peers.insert(addr);
         // drop(peers);
-        println!("New connection from: {}",addr.to_string());
+        println!("New connection from: {}", addr.to_string());
         tokio::spawn(handle_incoming(
             sock,
             addr,
@@ -291,7 +291,7 @@ async fn send_packet(
 
     packet.serialize(&mut Serializer::new(&mut buf)).unwrap();
 
-    let mut encoded_data: Vec<u8> = vec![0u8;buf.len()];
+    let mut encoded_data: Vec<u8> = vec![0u8; buf.len()];
     let cur = Cursor::new(&mut encoded_data);
     let mut encoder = zstd::Encoder::new(cur, 21)?;
     encoder.write_all(&buf)?;
@@ -412,7 +412,7 @@ pub async fn handle_peer(
     // main loop
     loop {
         // TODO: write select
-        let _packet = match receive_packet(&mut socket, &mut cipher, &mut rx_propagate).await {
+        let packet = match receive_packet(&mut socket, &mut cipher, &mut rx_propagate).await {
             Ok(p) => p,
             Err(e) => {
                 return Err(node_errors::NodeError::new(e.to_string()));
@@ -420,7 +420,24 @@ pub async fn handle_peer(
         };
 
         // handle packet
+        println!("{:?}", packet);
     }
+
+    Ok(())
+}
+
+async fn process_packet(
+    socket: &mut TcpStream,
+    serv_addr: SocketAddr,
+    packet:packet_models::Packet,
+    waiting_response:HashSet<u64>,
+    cipher: &mut ChaCha20,
+    peers_mut: Arc<Mutex<HashSet<SocketAddr>>>,
+    shutdown: Sender<u8>,
+    propagate: Sender<Vec<u8>>
+) -> ResultSmall<()>{
+
+    
 
     Ok(())
 }
