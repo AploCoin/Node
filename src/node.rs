@@ -12,6 +12,7 @@ use crate::models::*;
 use chacha20::cipher::KeyIvInit;
 use chacha20::ChaCha20;
 use getrandom::getrandom;
+use lazy_static::lazy_static;
 use rand_core::OsRng;
 use rmp_serde::{Deserializer, Serializer};
 use serde::Deserialize;
@@ -22,7 +23,12 @@ use std::io::Cursor;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::time::Duration;
 use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret};
+
+lazy_static! {
+    static ref PEER_TIMEOUT: Duration = Duration::from_secs(15);
+}
 
 const PEERS_BACKUP_FILE: &str = "peers.dump";
 
@@ -115,6 +121,13 @@ pub async fn start(
 ) -> Result<(), node_errors::NodeError> {
     let mut rx = shutdown.subscribe();
 
+    tokio::select! {
+        _ = connect_to_peers(peers_mut.clone(),shutdown.clone(),propagate.clone()) => {},
+        _ = rx.recv() => {
+            return Ok(());
+        }
+    };
+
     let listener = match TcpListener::bind(addr).await {
         Ok(s) => s,
         Err(e) => {
@@ -141,14 +154,14 @@ pub async fn start(
             }
         };
 
-        let mut peers = match peers_mut.lock() {
-            Ok(p) => p,
-            Err(e) => {
-                return Err(node_errors::NodeError::new(e.to_string()));
-            }
-        };
-        peers.insert(addr);
-        drop(peers);
+        // let mut peers = match peers_mut.lock() {
+        //     Ok(p) => p,
+        //     Err(e) => {
+        //         return Err(node_errors::NodeError::new(e.to_string()));
+        //     }
+        // };
+        // peers.insert(addr);
+        // drop(peers);
 
         tokio::spawn(handle_incoming(
             sock,
@@ -217,7 +230,7 @@ async fn exchange_keys(
         return Err(node_errors::NodeError::new(e.to_string()));
     };
 
-    if let Err(e) = socket.read(&mut buf).await {
+    if let Err(e) = socket.read_exact(&mut buf).await {
         return Err(node_errors::NodeError::new(e.to_string()));
     };
 
@@ -267,4 +280,99 @@ async fn receive_packet(
         packet_models::Packet::deserialize(&mut Deserializer::new(Cursor::new(decoded_data)))?;
 
     Ok(packet)
+}
+
+async fn connect_to_peers(
+    peers_mut: Arc<Mutex<HashSet<SocketAddr>>>,
+    shutdown: Sender<u8>,
+    propagate: Sender<Vec<u8>>,
+) {
+    let peers = peers_mut.lock().unwrap();
+
+    for peer in peers.iter() {
+        tokio::spawn(connect_to_peer(
+            *peer,
+            peers_mut.clone(),
+            shutdown.clone(),
+            propagate.clone(),
+        ));
+    }
+}
+
+async fn exchange_keys_client(
+    socket: &mut TcpStream,
+) -> Result<([u8; 12], SharedSecret), node_errors::NodeError> {
+    let mut buf = [0; 32];
+    let secret = EphemeralSecret::new(OsRng);
+    let public = PublicKey::from(&secret);
+
+    if let Err(e) = socket.read_exact(&mut buf).await {
+        return Err(node_errors::NodeError::new(e.to_string()));
+    };
+
+    if let Err(e) = socket.write(public.as_bytes()).await {
+        return Err(node_errors::NodeError::new(e.to_string()));
+    };
+
+    let other_public = PublicKey::from(buf);
+    let shared = secret.diffie_hellman(&other_public);
+
+    let mut nonce = [0u8; 12];
+
+    match getrandom(&mut nonce) {
+        Ok(_) => {}
+        Err(e) => {
+            return Err(node_errors::NodeError::new(
+                node_errors::GetRandomError::new(e).to_string(),
+            ));
+        }
+    }
+
+    Ok((nonce, shared))
+}
+
+pub async fn connect_to_peer(
+    addr: SocketAddr,
+    peers_mut: Arc<Mutex<HashSet<SocketAddr>>>,
+    shutdown: Sender<u8>,
+    propagate: Sender<Vec<u8>>,
+) {
+    let mut rx = shutdown.subscribe();
+    tokio::select! {
+        _ = rx.recv() => {},
+        _ = handle_peer(&addr, peers_mut, propagate) => {}
+    };
+}
+
+pub async fn handle_peer(
+    addr: &SocketAddr,
+    peers_mut: Arc<Mutex<HashSet<SocketAddr>>>,
+    propagate: Sender<Vec<u8>>,
+) -> Result<(), node_errors::NodeError> {
+    let mut rx_propagate = propagate.subscribe();
+
+    let mut socket =
+        if let Ok(Ok(s)) = tokio::time::timeout(*PEER_TIMEOUT, TcpStream::connect(addr)).await {
+            s
+        } else {
+            // might be a bug with mutex being block forever
+            let mut peers = peers_mut.lock().unwrap();
+            peers.remove(addr);
+
+            return Err(node_errors::NodeError::new("Connection error".to_string()));
+        };
+
+    let (nonce, shared) = match exchange_keys_client(&mut socket).await {
+        Ok(d) => d,
+        Err(e) => {
+            let mut peers = peers_mut.lock().unwrap();
+            peers.remove(addr);
+
+            return Err(e);
+        }
+    };
+
+    let mut cipher = ChaCha20::new(shared.as_bytes().into(), &nonce.into());
+
+    Ok(())
 }
