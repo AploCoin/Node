@@ -3,8 +3,8 @@ use std::net::SocketAddr;
 
 use chacha20::cipher::StreamCipher;
 use chacha20::cipher::StreamCipherSeek;
-use tokio::sync::broadcast::Sender;
 use tokio::sync::broadcast::Receiver;
+use tokio::sync::broadcast::Sender;
 
 use crate::errors::*;
 use crate::models::*;
@@ -19,18 +19,18 @@ use serde::Serialize;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::Cursor;
+use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret};
-use std::sync::{Arc, Mutex};
 
 const PEERS_BACKUP_FILE: &str = "peers.dump";
 
 macro_rules! read_exact {
     ($sock:expr, $buf:expr, $propagate:expr) => {
-        loop{
+        loop {
             let _ = tokio::select! {
-                msg = $propagate.recv() =>{
+                _msg = $propagate.recv() =>{
                     continue;
                 },
                 res = $sock.read_exact(&mut $buf) => {
@@ -39,9 +39,8 @@ macro_rules! read_exact {
                 }
             };
         }
-    }
+    };
 }
-
 
 // #[derive(Debug)]
 // pub struct Peer {
@@ -51,9 +50,7 @@ macro_rules! read_exact {
 //     last_response: u64,
 // }
 
-
-
-pub fn load_peers(peers_mut:Arc<Mutex<HashSet<SocketAddr>>>) -> ResultSmall<()> {
+pub fn load_peers(peers_mut: Arc<Mutex<HashSet<SocketAddr>>>) -> ResultSmall<()> {
     let file = File::open(PEERS_BACKUP_FILE)?;
 
     let mut decoder = zstd::Decoder::new(file)?;
@@ -62,8 +59,7 @@ pub fn load_peers(peers_mut:Arc<Mutex<HashSet<SocketAddr>>>) -> ResultSmall<()> 
 
     decoder.read_to_end(&mut decoded_data)?;
 
-    let peers =
-        peers_dump::Peers::deserialize(&mut Deserializer::new(Cursor::new(decoded_data)))?;
+    let peers = peers_dump::Peers::deserialize(&mut Deserializer::new(Cursor::new(decoded_data)))?;
 
     let mut peers_storage = peers_mut.lock().unwrap();
     if let Some(dump) = peers.ipv4 {
@@ -83,7 +79,7 @@ pub fn load_peers(peers_mut:Arc<Mutex<HashSet<SocketAddr>>>) -> ResultSmall<()> 
     Ok(())
 }
 
-pub fn dump_peers(peers_mut:Arc<Mutex<HashSet<SocketAddr>>>) -> ResultSmall<()> {
+pub fn dump_peers(peers_mut: Arc<Mutex<HashSet<SocketAddr>>>) -> ResultSmall<()> {
     let target = File::create(PEERS_BACKUP_FILE)?;
 
     let mut encoder = zstd::Encoder::new(target, 21)?;
@@ -111,10 +107,15 @@ pub fn dump_peers(peers_mut:Arc<Mutex<HashSet<SocketAddr>>>) -> ResultSmall<()> 
     Ok(())
 }
 
-pub async fn start(addr: &str, peers_mut:Arc<Mutex<HashSet<SocketAddr>>>, shutdown: Sender<u8>, propagate:Sender<Vec<u8>>) -> Result<(), node_errors::NodeError> {
+pub async fn start(
+    addr: &str,
+    peers_mut: Arc<Mutex<HashSet<SocketAddr>>>,
+    shutdown: Sender<u8>,
+    propagate: Sender<Vec<u8>>,
+) -> Result<(), node_errors::NodeError> {
     let mut rx = shutdown.subscribe();
 
-    let listener = match TcpListener::bind(addr).await{
+    let listener = match TcpListener::bind(addr).await {
         Ok(s) => s,
         Err(e) => {
             return Err(node_errors::NodeError::new(e.to_string()));
@@ -140,7 +141,7 @@ pub async fn start(addr: &str, peers_mut:Arc<Mutex<HashSet<SocketAddr>>>, shutdo
             }
         };
 
-        let mut peers = match peers_mut.lock(){
+        let mut peers = match peers_mut.lock() {
             Ok(p) => p,
             Err(e) => {
                 return Err(node_errors::NodeError::new(e.to_string()));
@@ -149,7 +150,13 @@ pub async fn start(addr: &str, peers_mut:Arc<Mutex<HashSet<SocketAddr>>>, shutdo
         peers.insert(addr);
         drop(peers);
 
-        tokio::spawn(handle_incoming(sock, addr, shutdown.clone(), propagate.clone(), peers_mut.clone()));
+        tokio::spawn(handle_incoming(
+            sock,
+            addr,
+            shutdown.clone(),
+            propagate.clone(),
+            peers_mut.clone(),
+        ));
     }
 
     Ok(())
@@ -160,12 +167,12 @@ async fn handle_incoming(
     addr: SocketAddr,
     shutdown: Sender<u8>,
     propagate: Sender<Vec<u8>>,
-    peers: Arc<Mutex<HashSet<SocketAddr>>>
+    peers: Arc<Mutex<HashSet<SocketAddr>>>,
 ) -> Result<(), node_errors::NodeError> {
     let mut rx = shutdown.subscribe();
     let mut rx_propagate = propagate.subscribe();
 
-    let (nonce, shared) = tokio::select!{
+    let (nonce, shared) = tokio::select! {
         res = exchange_keys(&mut socket) => res?,
         _ = rx.recv() => {
             return Ok(());
@@ -174,9 +181,8 @@ async fn handle_incoming(
     let mut cipher = ChaCha20::new(shared.as_bytes().into(), &nonce.into());
 
     // main loop
-    loop{
-
-        let packet = tokio::select!{
+    loop {
+        let _packet = tokio::select! {
             _ = rx.recv() => {
                 // stop connection
                 break;
@@ -190,9 +196,8 @@ async fn handle_incoming(
                 }
             }
         };
-        
-        // handle packet
 
+        // handle packet
     }
 
     let mut peers_unwrapped = peers.lock().unwrap();
@@ -233,16 +238,18 @@ async fn exchange_keys(
     Ok((nonce, shared))
 }
 
-
-
-async fn receive_packet(socket: &mut TcpStream, cipher:&mut ChaCha20, propagate:&mut Receiver<Vec<u8>>) -> ResultSmall<packet_models::Packet>{
+async fn receive_packet(
+    socket: &mut TcpStream,
+    cipher: &mut ChaCha20,
+    propagate: &mut Receiver<Vec<u8>>,
+) -> ResultSmall<packet_models::Packet> {
     // read size of the packet
-    let mut recv_buffer = [0u8;4];
+    let mut recv_buffer = [0u8; 4];
     read_exact!(socket, recv_buffer, propagate);
     let packet_size = u32::from_be_bytes(recv_buffer) as usize;
-    
+
     // read actual packet
-    let mut recv_buffer = vec![0u8;packet_size];
+    let mut recv_buffer = vec![0u8; packet_size];
     read_exact!(socket, recv_buffer, propagate);
 
     // decrypt packet
@@ -250,15 +257,14 @@ async fn receive_packet(socket: &mut TcpStream, cipher:&mut ChaCha20, propagate:
     cipher.seek(0);
 
     // uncompress packet
-    let mut decoded_data:Vec<u8> = Vec::with_capacity(packet_size);
+    let mut decoded_data: Vec<u8> = Vec::with_capacity(packet_size);
     let cur = Cursor::new(recv_buffer);
     let mut decoder = zstd::Decoder::new(cur)?;
     decoder.read_to_end(&mut decoded_data)?;
 
     // deserialize packet
-    let packet = packet_models::Packet::deserialize(&mut Deserializer::new(Cursor::new(decoded_data)))?;
+    let packet =
+        packet_models::Packet::deserialize(&mut Deserializer::new(Cursor::new(decoded_data)))?;
 
     Ok(packet)
-
 }
-

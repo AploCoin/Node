@@ -16,6 +16,7 @@ macro_rules! box_array {
     }};
 }
 
+#[allow(dead_code)]
 pub fn current_time() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
