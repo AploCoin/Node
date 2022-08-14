@@ -25,8 +25,15 @@ pub mod packet_models {
     }
 
     #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
-    #[serde(tag = "q")]
-    pub enum Request {
+    pub struct Request {
+        id: usize,
+        q: RequestType,
+        body: Option<Vec<u8>>,
+    }
+
+    #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
+    //#[serde(tag = "q")]
+    pub enum RequestType {
         #[allow(non_camel_case_types)]
         get_nodes,
 
@@ -35,6 +42,9 @@ pub mod packet_models {
 
         #[allow(non_camel_case_types)]
         get_transaction,
+
+        #[allow(non_camel_case_types)]
+        announce,
     }
 
     #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -83,6 +93,32 @@ pub mod packet_models {
 
             let obj = Packet::error(ErrorR {
                 code: ErrorCode::ParseError,
+            });
+
+            obj.serialize(&mut Serializer::new(&mut buf)).unwrap();
+
+            let deserialized =
+                Packet::deserialize(&mut Deserializer::new(Cursor::new(buf))).unwrap();
+
+            assert_eq!(obj, deserialized);
+        }
+
+        #[test]
+        fn test_request() {
+            let mut buf: Vec<u8> = Vec::new();
+
+            let mut body: Vec<u8> = Vec::with_capacity(6);
+            body.push(127);
+            body.push(0);
+            body.push(0);
+            body.push(1);
+            body.push(0);
+            body.push(255);
+
+            let obj = Packet::request(Request {
+                id: 255,
+                q: RequestType::announce,
+                body: Some(body),
             });
 
             obj.serialize(&mut Serializer::new(&mut buf)).unwrap();
