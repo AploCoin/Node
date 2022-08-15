@@ -85,8 +85,8 @@ pub mod packet_models {
 
     #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
     pub struct GetNodesReponse {
-        pub ipv4: Option<Vec<SocketAddr>>,
-        pub ipv6: Option<Vec<SocketAddr>>,
+        pub ipv4: Option<Vec<u8>>,
+        pub ipv6: Option<Vec<u8>>,
     }
 
     #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -179,6 +179,32 @@ pub fn addr2bin(addr: &SocketAddr) -> Vec<u8> {
     to_return.push(port as u8);
 
     to_return
+}
+
+pub fn bin2addr(bin:&[u8]) -> ResultSmall<SocketAddr>{
+    match bin.len(){
+        6 => {
+            let port: u16 = bin[5] as u16 + ((bin[4] as u16) << 8);
+            Ok(SocketAddr::new(
+                IpAddr::V4(Ipv4Addr::new(
+                    bin[0],
+                    bin[1],
+                    bin[2],
+                    bin[3],
+                )),
+                port,
+            ))
+        },
+        18 => {
+            let port: u16 = bin[17] as u16 + ((bin[16] as u16) << 8);
+            let octets: [u8; 16] = bin[0..16].try_into()?;
+            let addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::from(octets)), port);
+            Ok(addr)
+        },
+        _ => {
+            return Err(models_errors::BadAddress.into());
+        }
+    }
 }
 
 pub fn dump_addresses(addrs: &[SocketAddr]) -> (Option<Vec<u8>>, Option<Vec<u8>>) {

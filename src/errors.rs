@@ -12,6 +12,10 @@ pub mod models_errors {
     #[derive(Debug, Clone, Error)]
     #[error("The amount of bytes should be divisable by 18")]
     pub struct WrongSizeIPv6;
+
+    #[derive(Debug, Clone, Error)]
+    #[error("Bad address")]
+    pub struct BadAddress;
 }
 
 pub mod node_errors {
