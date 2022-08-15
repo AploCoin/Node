@@ -12,7 +12,6 @@ use crate::models;
 use crate::models::*;
 use chacha20::cipher::KeyIvInit;
 use chacha20::ChaCha20;
-use getrandom::getrandom;
 use lazy_static::lazy_static;
 use rand_core::OsRng;
 use rmp_serde::{Deserializer, Serializer};
@@ -170,7 +169,7 @@ pub async fn start(
         // };
         // peers.insert(addr);
         // drop(peers);
-        println!("New connection from: {}", addr.to_string());
+        println!("New connection from: {}", addr);
         tokio::spawn(handle_incoming(
             sock,
             addr,
@@ -400,10 +399,7 @@ pub async fn handle_peer(
 
     let body = models::addr2bin(serv_addr);
     let packet = packet_models::Packet::request(packet_models::Request::announce(
-        packet_models::AnnounceRequest{
-            id,
-            addr:body
-        }
+        packet_models::AnnounceRequest { id, addr: body },
     ));
 
     if let Err(e) = send_packet(&mut socket, &mut cipher, packet).await {
@@ -430,15 +426,22 @@ pub async fn handle_peer(
 async fn process_packet(
     socket: &mut TcpStream,
     serv_addr: SocketAddr,
-    packet:packet_models::Packet,
-    waiting_response:HashSet<u64>,
+    packet: packet_models::Packet,
+    waiting_response: HashSet<u64>,
     cipher: &mut ChaCha20,
     peers_mut: Arc<Mutex<HashSet<SocketAddr>>>,
-    shutdown: Sender<u8>,
     propagate: Sender<Vec<u8>>
-) -> ResultSmall<()>{
-
-      
+) -> ResultSmall<()> {
+    match packet {
+        packet_models::Packet::request(r) => match r {
+            packet_models::Request::announce(p) => {}
+            packet_models::Request::get_amount(p) => {}
+            packet_models::Request::get_nodes(p) => {}
+            packet_models::Request::get_transaction(p) => {}
+        },
+        packet_models::Packet::response(r) => {}
+        packet_models::Packet::error(e) => {}
+    }
 
     Ok(())
 }

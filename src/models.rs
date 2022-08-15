@@ -29,40 +29,40 @@ pub mod packet_models {
     pub enum Request {
         #[allow(non_camel_case_types)]
         get_nodes(GetNodesRequest),
-        
+
         #[allow(non_camel_case_types)]
         get_amount(GetAmountRequest),
-        
+
         #[allow(non_camel_case_types)]
         get_transaction(GetTransactionRequest),
 
         #[allow(non_camel_case_types)]
-        announce(AnnounceRequest)
+        announce(AnnounceRequest),
     }
 
     #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
     #[allow(non_camel_case_types)]
-    pub struct GetNodesRequest{
-        pub id: u64,
-    }
-
-    #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
-    #[allow(non_camel_case_types)]
-    pub struct GetAmountRequest{
-        pub id: u64,
-    }
-    
-    #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
-    #[allow(non_camel_case_types)]
-    pub struct GetTransactionRequest{
+    pub struct GetNodesRequest {
         pub id: u64,
     }
 
     #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
     #[allow(non_camel_case_types)]
-    pub struct AnnounceRequest{
+    pub struct GetAmountRequest {
         pub id: u64,
-        pub addr: Vec<u8>
+    }
+
+    #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
+    #[allow(non_camel_case_types)]
+    pub struct GetTransactionRequest {
+        pub id: u64,
+    }
+
+    #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
+    #[allow(non_camel_case_types)]
+    pub struct AnnounceRequest {
+        pub id: u64,
+        pub addr: Vec<u8>,
     }
 
     #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -103,7 +103,7 @@ pub mod packet_models {
     mod packet_tests {
         use super::*;
         use rmp_serde::{Deserializer, Serializer};
-        use std::{io::Cursor};
+        use std::io::Cursor;
 
         #[test]
         fn test_error() {
@@ -133,12 +133,7 @@ pub mod packet_models {
             addr.push(0);
             addr.push(255);
 
-            let obj = Packet::request(Request::announce(
-                AnnounceRequest{
-                    id: 20,
-                    addr
-                }
-            ));
+            let obj = Packet::request(Request::announce(AnnounceRequest { id: 20, addr }));
 
             obj.serialize(&mut Serializer::new(&mut buf)).unwrap();
 
