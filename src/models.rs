@@ -25,26 +25,44 @@ pub mod packet_models {
     }
 
     #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
-    pub struct Request {
-        pub id: u64,
-        pub q: RequestType,
-        pub body: Option<Vec<u8>>,
+    #[serde(tag = "q")]
+    pub enum Request {
+        #[allow(non_camel_case_types)]
+        get_nodes(GetNodesRequest),
+        
+        #[allow(non_camel_case_types)]
+        get_amount(GetAmountRequest),
+        
+        #[allow(non_camel_case_types)]
+        get_transaction(GetTransactionRequest),
+
+        #[allow(non_camel_case_types)]
+        announce(AnnounceRequest)
     }
 
     #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
-    //#[serde(tag = "q")]
-    pub enum RequestType {
-        #[allow(non_camel_case_types)]
-        get_nodes,
+    #[allow(non_camel_case_types)]
+    pub struct GetNodesRequest{
+        pub id: u64,
+    }
 
-        #[allow(non_camel_case_types)]
-        get_amount,
+    #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
+    #[allow(non_camel_case_types)]
+    pub struct GetAmountRequest{
+        pub id: u64,
+    }
+    
+    #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
+    #[allow(non_camel_case_types)]
+    pub struct GetTransactionRequest{
+        pub id: u64,
+    }
 
-        #[allow(non_camel_case_types)]
-        get_transaction,
-
-        #[allow(non_camel_case_types)]
-        announce,
+    #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
+    #[allow(non_camel_case_types)]
+    pub struct AnnounceRequest{
+        pub id: u64,
+        pub addr: Vec<u8>
     }
 
     #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -67,8 +85,8 @@ pub mod packet_models {
 
     #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
     pub struct GetNodesReponse {
-        pub ipv4: Option<Vec<u8>>,
-        pub ipv6: Option<Vec<u8>>,
+        pub ipv4: Option<Vec<SocketAddr>>,
+        pub ipv6: Option<Vec<SocketAddr>>,
     }
 
     #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -85,7 +103,7 @@ pub mod packet_models {
     mod packet_tests {
         use super::*;
         use rmp_serde::{Deserializer, Serializer};
-        use std::io::Cursor;
+        use std::{io::Cursor};
 
         #[test]
         fn test_error() {
@@ -107,19 +125,20 @@ pub mod packet_models {
         fn test_request() {
             let mut buf: Vec<u8> = Vec::new();
 
-            let mut body: Vec<u8> = Vec::with_capacity(6);
-            body.push(127);
-            body.push(0);
-            body.push(0);
-            body.push(1);
-            body.push(0);
-            body.push(255);
+            let mut addr: Vec<u8> = Vec::with_capacity(6);
+            addr.push(127);
+            addr.push(0);
+            addr.push(0);
+            addr.push(1);
+            addr.push(0);
+            addr.push(255);
 
-            let obj = Packet::request(Request {
-                id: 255,
-                q: RequestType::announce,
-                body: Some(body),
-            });
+            let obj = Packet::request(Request::announce(
+                AnnounceRequest{
+                    id: 20,
+                    addr
+                }
+            ));
 
             obj.serialize(&mut Serializer::new(&mut buf)).unwrap();
 
@@ -141,6 +160,7 @@ pub mod peers_dump {
     }
 }
 
+#[warn(dead_code)]
 pub fn addr2bin(addr: &SocketAddr) -> Vec<u8> {
     let mut to_return: Vec<u8>;
 

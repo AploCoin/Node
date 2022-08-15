@@ -399,11 +399,12 @@ pub async fn handle_peer(
     waiting_reseponse.insert(id);
 
     let body = models::addr2bin(serv_addr);
-    let packet = packet_models::Packet::request(packet_models::Request {
-        id,
-        q: packet_models::RequestType::announce,
-        body: Some(body),
-    });
+    let packet = packet_models::Packet::request(packet_models::Request::announce(
+        packet_models::AnnounceRequest{
+            id,
+            addr:body
+        }
+    ));
 
     if let Err(e) = send_packet(&mut socket, &mut cipher, packet).await {
         return Err(node_errors::NodeError::new(e.to_string()));
@@ -437,7 +438,7 @@ async fn process_packet(
     propagate: Sender<Vec<u8>>
 ) -> ResultSmall<()>{
 
-    
+      
 
     Ok(())
 }
