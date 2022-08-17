@@ -518,13 +518,13 @@ async fn connect_new_peers_wrapped(
             }
         };
 
-        // probably need to properly check if peer has
-        // already being connected to
-        let mut peers = peers_mut.lock().unwrap();
-        if !peers.insert(peer_addr) {
-            continue;
-        }
-        drop(peers);
+        // // probably need to properly check if peer has
+        // // already being connected to
+        // let mut peers = peers_mut.lock().unwrap();
+        // if !peers.insert(peer_addr) {
+        //     continue;
+        // }
+        // drop(peers);
 
         tokio::spawn(connect_to_peer(
             peer_addr,
