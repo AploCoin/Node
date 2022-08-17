@@ -197,9 +197,7 @@ pub fn bin2addr(bin: &[u8]) -> ResultSmall<SocketAddr> {
             let addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::from(octets)), port);
             Ok(addr)
         }
-        _ => {
-            Err(models_errors::BadAddress.into())
-        }
+        _ => Err(models_errors::BadAddress.into()),
     }
 }
 

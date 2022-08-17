@@ -155,7 +155,7 @@ pub async fn start(
             shutdown.clone(),
             propagate.clone(),
             peers_mut.clone(),
-            new_peers_tx.clone()
+            new_peers_tx.clone(),
         ));
     }
 
@@ -163,12 +163,12 @@ pub async fn start(
 }
 
 async fn handle_incoming(
-    mut socket: TcpStream,
+    socket: TcpStream,
     addr: SocketAddr,
     shutdown: Sender<u8>,
-    mut propagate: Sender<packet_models::Packet>,
+    propagate: Sender<packet_models::Packet>,
     peers: Arc<Mutex<HashSet<SocketAddr>>>,
-    mut new_peers_tx: Sender<SocketAddr>
+    new_peers_tx: Sender<SocketAddr>,
 ) -> Result<(), node_errors::NodeError> {
     let mut rx = shutdown.subscribe();
     tokio::select! {
@@ -179,7 +179,7 @@ async fn handle_incoming(
             peers,
             new_peers_tx) => res,
         _ = rx.recv() => {
-            return Ok(());
+            Ok(())
         }
     }
 }
@@ -189,7 +189,7 @@ async fn handle_incoming_wrapped(
     addr: SocketAddr,
     mut propagate: Sender<packet_models::Packet>,
     peers: Arc<Mutex<HashSet<SocketAddr>>>,
-    mut new_peers_tx: Sender<SocketAddr>
+    mut new_peers_tx: Sender<SocketAddr>,
 ) -> Result<(), node_errors::NodeError> {
     let mut rx_propagate = propagate.subscribe();
 
@@ -204,20 +204,15 @@ async fn handle_incoming_wrapped(
 
     // main loop
     loop {
-        let packet = match receive_packet(
-                                &mut socket, 
-                                &mut cipher, 
-                                &mut rx_propagate).await {
-                Ok(p) => p,
-                Err(e) => {
-                    return Err(node_errors::NodeError::new(e.to_string()));
-                }
-                
-            };
-        
+        let packet = match receive_packet(&mut socket, &mut cipher, &mut rx_propagate).await {
+            Ok(p) => p,
+            Err(e) => {
+                return Err(node_errors::NodeError::new(e.to_string()));
+            }
+        };
 
         // handle packet
-        if let Err(_) = process_packet(
+        if process_packet(
             &mut socket,
             packet,
             &mut waiting_response,
@@ -227,8 +222,8 @@ async fn handle_incoming_wrapped(
             &mut new_peers_tx,
         )
         .await
+        .is_err()
         {}
-        
     }
 
     Ok(())
@@ -427,7 +422,7 @@ pub async fn handle_peer(
         };
 
         // handle packet
-        if let Err(_) = process_packet(
+        if process_packet(
             &mut socket,
             packet,
             &mut waiting_response,
@@ -437,6 +432,7 @@ pub async fn handle_peer(
             &mut new_peers_tx,
         )
         .await
+        .is_err()
         {}
     }
 
@@ -457,9 +453,7 @@ async fn process_packet(
             packet_models::Request::announce(p) => {
                 let addr = bin2addr(&p.addr)?;
 
-                if addr.ip().is_loopback() 
-                    || addr.ip().is_unspecified(){
-
+                if addr.ip().is_loopback() || addr.ip().is_unspecified() {
                     let response_packet = packet_models::Packet::error(packet_models::ErrorR {
                         code: packet_models::ErrorCode::BadAddress,
                     });
