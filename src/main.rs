@@ -12,7 +12,6 @@ use tokio::signal;
 use tokio::sync::broadcast;
 use tokio::time::{sleep, Duration};
 
-
 #[tokio::main]
 async fn main() -> errors::ResultSmall<()> {
     // load .env file
@@ -20,8 +19,8 @@ async fn main() -> errors::ResultSmall<()> {
 
     // configure channels
     let (tx, mut rx) = broadcast::channel::<u8>(1);
-    let (txp, _) = broadcast::channel::<Vec<u8>>(100);
-    let (new_peers_tx,_) = broadcast::channel::<SocketAddr>(100);
+    let (txp, _) = broadcast::channel::<models::packet_models::Packet>(100);
+    let (new_peers_tx, _) = broadcast::channel::<SocketAddr>(100);
 
     let peers: Arc<Mutex<HashSet<SocketAddr>>> = Arc::new(Mutex::new(HashSet::with_capacity(100)));
 
@@ -37,20 +36,10 @@ async fn main() -> errors::ResultSmall<()> {
     println!("Starting the node...");
 
     // starting main tasks
-    let fut = node::start( 
-        peers.clone(), 
-        tx.clone(), 
-        txp.clone(),
-        new_peers_tx.clone()
-    );
+    let fut = node::start(peers.clone(), tx.clone(), txp.clone(), new_peers_tx.clone());
     tokio::spawn(fut);
 
-    let fut = node::connect_new_peers(
-        tx.clone(),
-        peers.clone(),
-        txp.clone(),
-        new_peers_tx
-    );
+    let fut = node::connect_new_peers(tx.clone(), peers.clone(), txp.clone(), new_peers_tx);
     tokio::spawn(fut);
 
     // giving the node the time to subscribe

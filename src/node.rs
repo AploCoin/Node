@@ -1,16 +1,15 @@
 use std::collections::HashSet;
 use std::net::SocketAddr;
-use std::str::FromStr;
 
 use chacha20::cipher::StreamCipher;
 use chacha20::cipher::StreamCipherSeek;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::broadcast::Sender;
 
+use crate::config::*;
 use crate::errors::*;
 use crate::models;
 use crate::models::*;
-use crate::config::*;
 use chacha20::cipher::KeyIvInit;
 use chacha20::ChaCha20;
 use lazy_static::lazy_static;
@@ -48,14 +47,6 @@ macro_rules! read_exact {
         }
     };
 }
-
-// #[derive(Debug)]
-// pub struct Peer {
-//     addr: SocketAddr,
-//     time_connected: u64,
-//     last_sent_message: u64,
-//     last_response: u64,
-// }
 
 pub fn load_peers(peers_mut: Arc<Mutex<HashSet<SocketAddr>>>) -> ResultSmall<()> {
     let file = File::open(PEERS_BACKUP_FILE)?;
@@ -117,31 +108,29 @@ pub fn dump_peers(peers_mut: Arc<Mutex<HashSet<SocketAddr>>>) -> ResultSmall<()>
 pub async fn start(
     peers_mut: Arc<Mutex<HashSet<SocketAddr>>>,
     shutdown: Sender<u8>,
-    propagate: Sender<Vec<u8>>,
-    new_peers_tx: Sender<SocketAddr>
+    propagate: Sender<packet_models::Packet>,
+    new_peers_tx: Sender<SocketAddr>,
 ) -> Result<(), node_errors::NodeError> {
     let mut rx = shutdown.subscribe();
 
     tokio::select! {
-        _ = connect_to_peers( 
-            peers_mut.clone(), 
+        _ = connect_to_peers(
+            peers_mut.clone(),
             shutdown.clone(),
             propagate.clone(),
-            new_peers_tx
+            new_peers_tx.clone()
         ) => {},
         _ = rx.recv() => {
             return Ok(());
         }
     };
 
-    let listener = match TcpListener::bind(SERVER_ADDRESS.clone()).await {
+    let listener = match TcpListener::bind(*SERVER_ADDRESS).await {
         Ok(s) => s,
         Err(e) => {
             return Err(node_errors::NodeError::new(e.to_string()));
         }
     };
-
-    println!("Node started");
 
     loop {
         let (sock, addr) = tokio::select! {
@@ -154,20 +143,11 @@ pub async fn start(
                 }
             },
             _ = rx.recv() => {
-                println!("Received stop signal");
                 shutdown.send(0).unwrap();
                 break;
             }
         };
 
-        // let mut peers = match peers_mut.lock() {
-        //     Ok(p) => p,
-        //     Err(e) => {
-        //         return Err(node_errors::NodeError::new(e.to_string()));
-        //     }
-        // };
-        // peers.insert(addr);
-        // drop(peers);
         println!("New connection from: {}", addr);
         tokio::spawn(handle_incoming(
             sock,
@@ -175,6 +155,7 @@ pub async fn start(
             shutdown.clone(),
             propagate.clone(),
             peers_mut.clone(),
+            new_peers_tx.clone()
         ));
     }
 
@@ -185,42 +166,71 @@ async fn handle_incoming(
     mut socket: TcpStream,
     addr: SocketAddr,
     shutdown: Sender<u8>,
-    propagate: Sender<Vec<u8>>,
+    mut propagate: Sender<packet_models::Packet>,
     peers: Arc<Mutex<HashSet<SocketAddr>>>,
+    mut new_peers_tx: Sender<SocketAddr>
 ) -> Result<(), node_errors::NodeError> {
     let mut rx = shutdown.subscribe();
-    let mut rx_propagate = propagate.subscribe();
-
-    println!("Exchanging keys");
-    let (nonce, shared) = tokio::select! {
-        res = exchange_keys(&mut socket) => res?,
+    tokio::select! {
+        res = handle_incoming_wrapped(
+            socket,
+            addr,
+            shutdown,
+            propagate,
+            peers,
+            new_peers_tx) => res,
         _ = rx.recv() => {
             return Ok(());
         }
-    };
+    }
+}
+
+async fn handle_incoming_wrapped(
+    mut socket: TcpStream,
+    addr: SocketAddr,
+    shutdown: Sender<u8>,
+    mut propagate: Sender<packet_models::Packet>,
+    peers: Arc<Mutex<HashSet<SocketAddr>>>,
+    mut new_peers_tx: Sender<SocketAddr>
+) -> Result<(), node_errors::NodeError> {
+    let mut rx_propagate = propagate.subscribe();
+
+    let mut waiting_response: HashSet<u64> = HashSet::with_capacity(20);
+
+    println!("Exchanging keys");
+    let (nonce, shared) = exchange_keys(&mut socket).await?;
+
     let mut cipher = ChaCha20::new(shared.as_bytes().into(), &nonce.into());
 
     println!("Created cipher");
 
     // main loop
     loop {
-        let packet = tokio::select! {
-            _ = rx.recv() => {
-                // stop connection
-                break;
-            }
-            pack = receive_packet(&mut socket, &mut cipher, &mut rx_propagate) => {
-                match pack{
-                    Ok(p) => p,
-                    Err(e) => {
-                        return Err(node_errors::NodeError::new(e.to_string()));
-                    }
+        let packet = match receive_packet(
+                                &mut socket, 
+                                &mut cipher, 
+                                &mut rx_propagate).await {
+                Ok(p) => p,
+                Err(e) => {
+                    return Err(node_errors::NodeError::new(e.to_string()));
                 }
-            }
-        };
+                
+            };
+        
 
         // handle packet
-        println!("{:?}", packet);
+        if let Err(_) = process_packet(
+            &mut socket,
+            packet,
+            &mut waiting_response,
+            &mut cipher,
+            peers.clone(),
+            &mut propagate,
+            &mut new_peers_tx,
+        )
+        .await
+        {}
+        
     }
 
     Ok(())
@@ -252,7 +262,7 @@ async fn exchange_keys(
 async fn receive_packet(
     socket: &mut TcpStream,
     cipher: &mut ChaCha20,
-    propagate: &mut Receiver<Vec<u8>>,
+    propagate: &mut Receiver<packet_models::Packet>,
 ) -> ResultSmall<packet_models::Packet> {
     // read size of the packet
     let mut recv_buffer = [0u8; 4];
@@ -308,8 +318,8 @@ async fn send_packet(
 async fn connect_to_peers(
     peers_mut: Arc<Mutex<HashSet<SocketAddr>>>,
     shutdown: Sender<u8>,
-    propagate: Sender<Vec<u8>>,
-    new_peers_tx: Sender<SocketAddr>
+    propagate: Sender<packet_models::Packet>,
+    new_peers_tx: Sender<SocketAddr>,
 ) {
     let peers = peers_mut.lock().unwrap();
 
@@ -319,7 +329,7 @@ async fn connect_to_peers(
             peers_mut.clone(),
             shutdown.clone(),
             propagate.clone(),
-            new_peers_tx.clone()
+            new_peers_tx.clone(),
         ));
     }
 }
@@ -351,15 +361,15 @@ pub async fn connect_to_peer(
     addr: SocketAddr,
     peers_mut: Arc<Mutex<HashSet<SocketAddr>>>,
     shutdown: Sender<u8>,
-    propagate: Sender<Vec<u8>>,
-    new_peers_tx: Sender<SocketAddr>
+    propagate: Sender<packet_models::Packet>,
+    new_peers_tx: Sender<SocketAddr>,
 ) {
     let mut rx = shutdown.subscribe();
     tokio::select! {
         _ = rx.recv() => {},
         _ = handle_peer(
-            &addr, 
-            peers_mut.clone(), 
+            &addr,
+            peers_mut.clone(),
             propagate,
             new_peers_tx
         ) => {}
@@ -372,8 +382,8 @@ pub async fn connect_to_peer(
 pub async fn handle_peer(
     addr: &SocketAddr,
     peers_mut: Arc<Mutex<HashSet<SocketAddr>>>,
-    propagate: Sender<Vec<u8>>,
-    new_peers_tx: Sender<SocketAddr>
+    mut propagate: Sender<packet_models::Packet>,
+    mut new_peers_tx: Sender<SocketAddr>,
 ) -> Result<(), node_errors::NodeError> {
     // set up
     let mut rx_propagate = propagate.subscribe();
@@ -394,12 +404,10 @@ pub async fn handle_peer(
     };
     let mut cipher = ChaCha20::new(shared.as_bytes().into(), &nonce.into());
 
-    let mut waiting_reseponse: HashSet<u64> = HashSet::with_capacity(20);
+    let mut waiting_response: HashSet<u64> = HashSet::with_capacity(20);
 
     // announce
     let id: u64 = rand::random();
-
-    waiting_reseponse.insert(id);
 
     let body = models::addr2bin(&SERVER_ADDRESS);
     let packet = packet_models::Packet::request(packet_models::Request::announce(
@@ -421,7 +429,17 @@ pub async fn handle_peer(
         };
 
         // handle packet
-        println!("{:?}", packet);
+        if let Err(_) = process_packet(
+            &mut socket,
+            packet,
+            &mut waiting_response,
+            &mut cipher,
+            peers_mut.clone(),
+            &mut propagate,
+            &mut new_peers_tx,
+        )
+        .await
+        {}
     }
 
     Ok(())
@@ -430,15 +448,37 @@ pub async fn handle_peer(
 async fn process_packet(
     socket: &mut TcpStream,
     packet: packet_models::Packet,
-    waiting_response: HashSet<u64>,
+    waiting_response: &mut HashSet<u64>,
     cipher: &mut ChaCha20,
     peers_mut: Arc<Mutex<HashSet<SocketAddr>>>,
-    propagate: Sender<Vec<u8>>,
-    new_peers_tx: Sender<SocketAddr>
+    propagate: &mut Sender<packet_models::Packet>,
+    new_peers_tx: &mut Sender<SocketAddr>,
 ) -> ResultSmall<()> {
-    match packet {
+    match &packet {
         packet_models::Packet::request(r) => match r {
-            packet_models::Request::announce(p) => {}
+            packet_models::Request::announce(p) => {
+                let addr = bin2addr(&p.addr)?;
+
+                if addr.ip().is_loopback() 
+                    || addr.ip().is_unspecified(){
+
+                    let response_packet = packet_models::Packet::error(packet_models::ErrorR {
+                        code: packet_models::ErrorCode::BadAddress,
+                    });
+                    send_packet(socket, cipher, response_packet).await?;
+
+                    return Ok(());
+                }
+
+                let mut peers = peers_mut.lock().unwrap();
+                let res = peers.insert(addr);
+                drop(peers);
+
+                if res {
+                    propagate.send(packet)?;
+                    new_peers_tx.send(addr)?;
+                }
+            }
             packet_models::Request::get_amount(p) => {}
             packet_models::Request::get_nodes(p) => {}
             packet_models::Request::get_transaction(p) => {}
@@ -453,9 +493,9 @@ async fn process_packet(
 pub async fn connect_new_peers(
     shutdown: Sender<u8>,
     peers_mut: Arc<Mutex<HashSet<SocketAddr>>>,
-    propagate: Sender<Vec<u8>>,
-    new_peers_tx: Sender<SocketAddr>
-){
+    propagate: Sender<packet_models::Packet>,
+    new_peers_tx: Sender<SocketAddr>,
+) {
     let mut shutdown_watcher = shutdown.subscribe();
     let mut new_peers_rx = new_peers_tx.subscribe();
 
@@ -473,35 +513,33 @@ pub async fn connect_new_peers(
 
 async fn connect_new_peers_wrapped(
     peers_mut: Arc<Mutex<HashSet<SocketAddr>>>,
-    propagate: Sender<Vec<u8>>,
+    propagate: Sender<packet_models::Packet>,
     shutdown: Sender<u8>,
     new_peers_rx: &mut Receiver<SocketAddr>,
-    new_peers_tx: Sender<SocketAddr>
-){
-
-    loop{
-        let peer_addr = match new_peers_rx.recv().await{
+    new_peers_tx: Sender<SocketAddr>,
+) {
+    loop {
+        let peer_addr = match new_peers_rx.recv().await {
             Ok(p) => p,
             Err(_) => {
                 continue;
             }
         };
 
-        // probably need to properly check if peer has 
+        // probably need to properly check if peer has
         // already being connected to
         let mut peers = peers_mut.lock().unwrap();
-        if !peers.insert(peer_addr){
+        if !peers.insert(peer_addr) {
             continue;
         }
         drop(peers);
 
         tokio::spawn(connect_to_peer(
-            peer_addr, 
-            peers_mut.clone(), 
-            shutdown.clone(), 
+            peer_addr,
+            peers_mut.clone(),
+            shutdown.clone(),
             propagate.clone(),
-            new_peers_tx.clone()
+            new_peers_tx.clone(),
         ));
     }
-
 }
