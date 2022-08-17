@@ -175,7 +175,6 @@ async fn handle_incoming(
         res = handle_incoming_wrapped(
             socket,
             addr,
-            shutdown,
             propagate,
             peers,
             new_peers_tx) => res,
@@ -188,7 +187,6 @@ async fn handle_incoming(
 async fn handle_incoming_wrapped(
     mut socket: TcpStream,
     addr: SocketAddr,
-    shutdown: Sender<u8>,
     mut propagate: Sender<packet_models::Packet>,
     peers: Arc<Mutex<HashSet<SocketAddr>>>,
     mut new_peers_tx: Sender<SocketAddr>
