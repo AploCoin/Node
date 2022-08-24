@@ -212,7 +212,6 @@ async fn handle_incoming_wrapped(
         if process_packet(
             &mut socket,
             packet,
-            &addr,
             &mut waiting_response,
             &mut cipher,
             peers.clone(),
@@ -425,7 +424,6 @@ pub async fn handle_peer(
         if process_packet(
             &mut socket,
             packet,
-            addr,
             &mut waiting_response,
             &mut cipher,
             peers_mut.clone(),
@@ -445,7 +443,6 @@ pub async fn handle_peer(
 async fn process_packet(
     socket: &mut TcpStream,
     packet: packet_models::Packet,
-    address: &SocketAddr,
     waiting_response: &mut HashSet<u64>,
     cipher: &mut ChaCha20,
     peers_mut: Arc<Mutex<HashSet<SocketAddr>>>,
@@ -482,7 +479,7 @@ async fn process_packet(
                 {
                     // clone peers into vec
                     let peers = peers_mut.lock().unwrap();
-                    peers_cloned = vec![SERVER_ADDRESS.clone(); peers.len()].into_boxed_slice();
+                    peers_cloned = vec![*SERVER_ADDRESS; peers.len()].into_boxed_slice();
                     for (index, peer) in peers.iter().enumerate() {
                         let cell = unsafe { peers_cloned.get_unchecked_mut(index) };
                         *cell = *peer;
