@@ -195,12 +195,9 @@ async fn handle_incoming_wrapped(
 
     let mut waiting_response: HashSet<u64> = HashSet::with_capacity(20);
 
-    println!("Exchanging keys");
     let (nonce, shared) = exchange_keys(&mut socket).await?;
 
     let mut cipher = ChaCha20::new(shared.as_bytes().into(), &nonce.into());
-
-    println!("Created cipher");
 
     // main loop
     loop {
@@ -215,6 +212,7 @@ async fn handle_incoming_wrapped(
         if process_packet(
             &mut socket,
             packet,
+            &addr,
             &mut waiting_response,
             &mut cipher,
             peers.clone(),
@@ -223,7 +221,9 @@ async fn handle_incoming_wrapped(
         )
         .await
         .is_err()
-        {}
+        {
+            break;
+        }
     }
 
     Ok(())
@@ -425,6 +425,7 @@ pub async fn handle_peer(
         if process_packet(
             &mut socket,
             packet,
+            addr,
             &mut waiting_response,
             &mut cipher,
             peers_mut.clone(),
@@ -433,7 +434,9 @@ pub async fn handle_peer(
         )
         .await
         .is_err()
-        {}
+        {
+            break;
+        }
     }
 
     Ok(())
@@ -442,6 +445,7 @@ pub async fn handle_peer(
 async fn process_packet(
     socket: &mut TcpStream,
     packet: packet_models::Packet,
+    address: &SocketAddr,
     waiting_response: &mut HashSet<u64>,
     cipher: &mut ChaCha20,
     peers_mut: Arc<Mutex<HashSet<SocketAddr>>>,
@@ -453,6 +457,7 @@ async fn process_packet(
             packet_models::Request::announce(p) => {
                 let addr = bin2addr(&p.addr)?;
 
+                // verify address is not loopback
                 if addr.ip().is_loopback() || addr.ip().is_unspecified() {
                     let response_packet = packet_models::Packet::error(packet_models::ErrorR {
                         code: packet_models::ErrorCode::BadAddress,
@@ -472,7 +477,31 @@ async fn process_packet(
                 }
             }
             packet_models::Request::get_amount(p) => {}
-            packet_models::Request::get_nodes(p) => {}
+            packet_models::Request::get_nodes(p) => {
+                let mut peers_cloned: Box<[SocketAddr]>;
+                {
+                    // clone peers into vec
+                    let peers = peers_mut.lock().unwrap();
+                    peers_cloned = vec![SERVER_ADDRESS.clone(); peers.len()].into_boxed_slice();
+                    for (index, peer) in peers.iter().enumerate() {
+                        let cell = unsafe { peers_cloned.get_unchecked_mut(index) };
+                        *cell = *peer;
+                    }
+                    drop(peers);
+                }
+
+                // dump ipv4 and ipv6 addresses in u8 vecs separately
+                let (ipv4, ipv6) = dump_addresses(&peers_cloned);
+
+                let packet = packet_models::Packet::response(packet_models::Response::get_nodes(
+                    packet_models::GetNodesReponse {
+                        id: p.id,
+                        ipv4,
+                        ipv6,
+                    },
+                ));
+                send_packet(socket, cipher, packet).await?;
+            }
             packet_models::Request::get_transaction(p) => {}
         },
         packet_models::Packet::response(r) => {}

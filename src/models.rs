@@ -86,17 +86,20 @@ pub mod packet_models {
 
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
     pub struct GetNodesReponse {
+        pub id: u64,
         pub ipv4: Option<Vec<u8>>,
         pub ipv6: Option<Vec<u8>>,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
     pub struct GetAmountReponse {
+        pub id: u64,
         pub amount: Option<Vec<u8>>,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
     pub struct GetTransactionResponse {
+        pub id: u64,
         pub transaction: Vec<u8>,
     }
 
