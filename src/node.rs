@@ -201,12 +201,31 @@ async fn handle_incoming_wrapped(
 
     // main loop
     loop {
-        let packet = match receive_packet(&mut socket, &mut cipher, &mut rx_propagate).await {
-            Ok(p) => p,
-            Err(e) => {
-                return Err(node_errors::NodeError::new(e.to_string()));
+        let packet = match tokio::time::timeout(
+            *PEER_TIMEOUT,
+            receive_packet(&mut socket, &mut cipher, &mut rx_propagate),
+        )
+        .await
+        {
+            Ok(r) => match r {
+                Ok(p) => p,
+                Err(e) => {
+                    return Err(node_errors::NodeError::new(e.to_string()));
+                }
+            },
+            Err(_) => {
+                return Err(node_errors::NodeError::new(
+                    "Connection Timed Out".to_string(),
+                ))
             }
         };
+
+        // }; match receive_packet(&mut socket, &mut cipher, &mut rx_propagate).await {
+        //     Ok(p) => p,
+        //     Err(e) => {
+        //         return Err(node_errors::NodeError::new(e.to_string()));
+        //     }
+        // };
 
         // handle packet
         if process_packet(
@@ -455,7 +474,9 @@ async fn process_packet(
                 let addr = bin2addr(&p.addr)?;
 
                 // verify address is not loopback
-                if addr.ip().is_loopback() || addr.ip().is_unspecified() {
+                if (addr.ip().is_loopback() && addr.port() == SERVER_ADDRESS.port())
+                    || addr.ip().is_unspecified()
+                {
                     let response_packet = packet_models::Packet::error(packet_models::ErrorR {
                         code: packet_models::ErrorCode::BadAddress,
                     });
