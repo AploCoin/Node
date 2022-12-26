@@ -7,9 +7,10 @@ mod config;
 
 use std::collections::HashSet;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::signal;
 use tokio::sync::broadcast;
+use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration};
 
 #[tokio::main]
@@ -24,7 +25,7 @@ async fn main() -> errors::ResultSmall<()> {
 
     let peers: Arc<Mutex<HashSet<SocketAddr>>> = Arc::new(Mutex::new(HashSet::with_capacity(100)));
 
-    match node::load_peers(peers.clone()) {
+    match node::load_peers(peers.clone()).await {
         Ok(_) => {
             println!("Successfuly loaded peers from the file")
         }
@@ -55,7 +56,7 @@ async fn main() -> errors::ResultSmall<()> {
         }
     }
 
-    match node::dump_peers(peers) {
+    match node::dump_peers(peers).await {
         Ok(_) => {
             println!("Successfuly dumped peers to the file")
         }

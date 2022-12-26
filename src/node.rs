@@ -20,9 +20,10 @@ use serde::Serialize;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::Cursor;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Mutex;
 use tokio::time::Duration;
 use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret};
 
@@ -48,7 +49,7 @@ macro_rules! read_exact {
     };
 }
 
-pub fn load_peers(peers_mut: Arc<Mutex<HashSet<SocketAddr>>>) -> ResultSmall<()> {
+pub async fn load_peers(peers_mut: Arc<Mutex<HashSet<SocketAddr>>>) -> ResultSmall<()> {
     let file = File::open(PEERS_BACKUP_FILE)?;
 
     let mut decoder = zstd::Decoder::new(file)?;
@@ -59,7 +60,7 @@ pub fn load_peers(peers_mut: Arc<Mutex<HashSet<SocketAddr>>>) -> ResultSmall<()>
 
     let peers = peers_dump::Peers::deserialize(&mut Deserializer::new(Cursor::new(decoded_data)))?;
 
-    let mut peers_storage = peers_mut.lock().unwrap();
+    let mut peers_storage = peers_mut.lock().await;
     if let Some(dump) = peers.ipv4 {
         let parsed = parse_ipv4(&dump)?;
         for addr in parsed {
@@ -77,12 +78,12 @@ pub fn load_peers(peers_mut: Arc<Mutex<HashSet<SocketAddr>>>) -> ResultSmall<()>
     Ok(())
 }
 
-pub fn dump_peers(peers_mut: Arc<Mutex<HashSet<SocketAddr>>>) -> ResultSmall<()> {
+pub async fn dump_peers(peers_mut: Arc<Mutex<HashSet<SocketAddr>>>) -> ResultSmall<()> {
     let target = File::create(PEERS_BACKUP_FILE)?;
 
     let mut encoder = zstd::Encoder::new(target, 21)?;
 
-    let peers_storage = peers_mut.lock().unwrap();
+    let peers_storage = peers_mut.lock().await;
 
     let mut peers: Vec<SocketAddr> = Vec::with_capacity(peers_storage.len());
 
@@ -105,6 +106,7 @@ pub fn dump_peers(peers_mut: Arc<Mutex<HashSet<SocketAddr>>>) -> ResultSmall<()>
     Ok(())
 }
 
+/// Start node, entry point
 pub async fn start(
     peers_mut: Arc<Mutex<HashSet<SocketAddr>>>,
     shutdown: Sender<u8>,
@@ -162,6 +164,7 @@ pub async fn start(
     Ok(())
 }
 
+/// Handle incoming connection wrapper
 async fn handle_incoming(
     socket: TcpStream,
     addr: SocketAddr,
@@ -184,6 +187,7 @@ async fn handle_incoming(
     }
 }
 
+/// Wrapped main body of incoming connection handler
 async fn handle_incoming_wrapped(
     mut socket: TcpStream,
     addr: SocketAddr,
@@ -195,8 +199,10 @@ async fn handle_incoming_wrapped(
 
     let mut waiting_response: HashSet<u64> = HashSet::with_capacity(20);
 
+    // start keys exchanging process
     let (nonce, shared) = exchange_keys(&mut socket).await?;
 
+    // get cipher
     let mut cipher = ChaCha20::new(shared.as_bytes().into(), &nonce.into());
 
     // main loop
@@ -220,13 +226,6 @@ async fn handle_incoming_wrapped(
             }
         };
 
-        // }; match receive_packet(&mut socket, &mut cipher, &mut rx_propagate).await {
-        //     Ok(p) => p,
-        //     Err(e) => {
-        //         return Err(node_errors::NodeError::new(e.to_string()));
-        //     }
-        // };
-
         // handle packet
         if process_packet(
             &mut socket,
@@ -247,6 +246,7 @@ async fn handle_incoming_wrapped(
     Ok(())
 }
 
+/// Exchange keys with connection, server side
 async fn exchange_keys(
     socket: &mut TcpStream,
 ) -> Result<([u8; 12], SharedSecret), node_errors::NodeError> {
@@ -332,7 +332,7 @@ async fn connect_to_peers(
     propagate: Sender<packet_models::Packet>,
     new_peers_tx: Sender<SocketAddr>,
 ) {
-    let peers = peers_mut.lock().unwrap();
+    let peers = peers_mut.lock().await;
 
     for peer in peers.iter() {
         tokio::spawn(connect_to_peer(
@@ -345,6 +345,7 @@ async fn connect_to_peers(
     }
 }
 
+/// Exchange keys with connection, client side
 async fn exchange_keys_client(
     socket: &mut TcpStream,
 ) -> Result<([u8; 12], SharedSecret), node_errors::NodeError> {
@@ -386,7 +387,8 @@ pub async fn connect_to_peer(
         ) => {}
     };
 
-    let mut peers = peers_mut.lock().unwrap();
+    // remove peer from active peers
+    let mut peers = peers_mut.lock().await;
     peers.remove(&addr);
 }
 
@@ -431,7 +433,6 @@ pub async fn handle_peer(
 
     // main loop
     loop {
-        // TODO: write select
         let packet = match receive_packet(&mut socket, &mut cipher, &mut rx_propagate).await {
             Ok(p) => p,
             Err(e) => {
@@ -485,7 +486,7 @@ async fn process_packet(
                     return Ok(());
                 }
 
-                let mut peers = peers_mut.lock().unwrap();
+                let mut peers = peers_mut.lock().await;
                 let res = peers.insert(addr);
                 drop(peers);
 
@@ -499,7 +500,7 @@ async fn process_packet(
                 let mut peers_cloned: Box<[SocketAddr]>;
                 {
                     // clone peers into vec
-                    let peers = peers_mut.lock().unwrap();
+                    let peers = peers_mut.lock().await;
                     peers_cloned = vec![*SERVER_ADDRESS; peers.len()].into_boxed_slice();
                     for (index, peer) in peers.iter().enumerate() {
                         let cell = unsafe { peers_cloned.get_unchecked_mut(index) };
