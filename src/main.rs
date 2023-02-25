@@ -4,6 +4,7 @@ mod node;
 #[macro_use]
 mod tools;
 mod config;
+mod encsocket;
 
 use std::collections::HashSet;
 use std::net::SocketAddr;

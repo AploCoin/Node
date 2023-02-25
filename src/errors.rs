@@ -49,3 +49,31 @@ pub mod node_errors {
     #[error("Peer closed connection")]
     pub struct ConnectionClosed {}
 }
+
+pub mod enc_socket_errors {
+    use rmp_serde::decode::Error as DeserializeError;
+    use std::io;
+
+    use super::*;
+
+    #[derive(Debug, Error)]
+    pub enum EncSocketError {
+        #[error("Error writing into socket: {0}")]
+        WriteSocketError(io::Error),
+
+        #[error("Error reading from socket: {0}")]
+        ReadSocketError(io::Error),
+
+        #[error("Too big packet: {0}")]
+        TooBigPacketError(usize),
+
+        #[error("Error decompressing packet: {0}")]
+        DecompressError(io::Error),
+
+        #[error("Error compressing packet: {0}")]
+        CompressError(io::Error),
+
+        #[error("Packet deserialization error: {0}")]
+        DeserializeError(DeserializeError),
+    }
+}
