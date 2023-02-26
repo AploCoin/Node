@@ -1,4 +1,15 @@
+use crate::errors::*;
+use crate::models::{dump_addresses, parse_ipv4, parse_ipv6, peers_dump};
+use rmp_serde::{Deserializer, Serializer};
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::fs::File;
+use std::io::prelude::*;
+use std::io::Cursor;
+use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::Mutex;
 
 #[macro_export]
 macro_rules! box_array {
@@ -22,4 +33,63 @@ pub fn current_time() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs()
+}
+
+const PEERS_BACKUP_FILE: &str = "peers.dump";
+
+pub async fn load_peers(peers_mut: Arc<Mutex<HashSet<SocketAddr>>>) -> ResultSmall<()> {
+    let file = File::open(PEERS_BACKUP_FILE)?;
+
+    let mut decoder = zstd::Decoder::new(file)?;
+
+    let mut decoded_data: Vec<u8> = Vec::new();
+
+    decoder.read_to_end(&mut decoded_data)?;
+
+    let peers = peers_dump::Peers::deserialize(&mut Deserializer::new(Cursor::new(decoded_data)))?;
+
+    let mut peers_storage = peers_mut.lock().await;
+    if let Some(dump) = peers.ipv4 {
+        let parsed = parse_ipv4(&dump)?;
+        for addr in parsed {
+            peers_storage.insert(addr);
+        }
+    }
+
+    if let Some(dump) = peers.ipv6 {
+        let parsed = parse_ipv6(&dump)?;
+        for addr in parsed {
+            peers_storage.insert(addr);
+        }
+    }
+
+    Ok(())
+}
+
+pub async fn dump_peers(peers_mut: Arc<Mutex<HashSet<SocketAddr>>>) -> ResultSmall<()> {
+    let target = File::create(PEERS_BACKUP_FILE)?;
+
+    let mut encoder = zstd::Encoder::new(target, 21)?;
+
+    let peers_storage = peers_mut.lock().await;
+
+    let mut peers: Vec<SocketAddr> = Vec::with_capacity(peers_storage.len());
+
+    for peer in peers_storage.iter() {
+        peers.push(*peer);
+    }
+
+    let (ipv4, ipv6) = dump_addresses(&peers);
+
+    let mut buf: Vec<u8> = Vec::new();
+
+    let peers = peers_dump::Peers { ipv4, ipv6 };
+
+    peers.serialize(&mut Serializer::new(&mut buf))?;
+
+    encoder.write_all(&buf)?;
+
+    encoder.finish()?;
+
+    Ok(())
 }

@@ -6,6 +6,7 @@ mod tools;
 mod config;
 mod encsocket;
 
+use blockchaintree::blockchaintree::BlockChainTree;
 use std::collections::HashSet;
 use std::io;
 use std::net::SocketAddr;
@@ -50,7 +51,8 @@ async fn main() -> errors::ResultSmall<()> {
 
     let peers: Arc<Mutex<HashSet<SocketAddr>>> = Arc::new(Mutex::new(HashSet::with_capacity(100)));
 
-    match node::load_peers(peers.clone()).await {
+    debug!("Loading peers");
+    match tools::load_peers(peers.clone()).await {
         Ok(_) => {
             info!("Successfuly loaded peers from the file")
         }
@@ -62,9 +64,34 @@ async fn main() -> errors::ResultSmall<()> {
         }
     }
 
+    // loading blockchain
+    info!("Loading blockchain");
+    let blockchain = Arc::new(match BlockChainTree::with_config() {
+        Err(e) => {
+            error!("Failed to load blockchain with config {:?}", e.to_string());
+            info!("Trying to load blockchain without config");
+            BlockChainTree::without_config()
+                .map_err(|e| {
+                    error!(
+                        "Error loading blockchain tree without config: {:?}",
+                        e.to_string()
+                    )
+                })
+                .unwrap()
+        }
+        Ok(tree) => tree,
+    });
+    debug!("Blockchain loaded");
+
     // starting main tasks
     debug!("Starting node task");
-    let fut = node::start(peers.clone(), tx.clone(), txp.clone(), new_peers_tx.clone());
+    let fut = node::start(
+        peers.clone(),
+        tx.clone(),
+        txp.clone(),
+        new_peers_tx.clone(),
+        blockchain,
+    );
     tokio::spawn(fut);
 
     debug!("Starting connecting new peers task");
@@ -88,7 +115,7 @@ async fn main() -> errors::ResultSmall<()> {
         }
     }
 
-    match node::dump_peers(peers).await {
+    match tools::dump_peers(peers).await {
         Ok(_) => {
             info!("Successfuly dumped peers to the file")
         }
