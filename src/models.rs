@@ -1,4 +1,4 @@
-use crate::errors::*;
+use crate::errors::{models_errors::AddressError, *};
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
@@ -185,7 +185,7 @@ pub fn addr2bin(addr: &SocketAddr) -> Vec<u8> {
     to_return
 }
 
-pub fn bin2addr(bin: &[u8]) -> ResultSmall<SocketAddr> {
+pub fn bin2addr(bin: &[u8]) -> Result<SocketAddr, AddressError> {
     match bin.len() {
         6 => {
             let port: u16 = bin[5] as u16 + ((bin[4] as u16) << 8);
@@ -196,11 +196,11 @@ pub fn bin2addr(bin: &[u8]) -> ResultSmall<SocketAddr> {
         }
         18 => {
             let port: u16 = bin[17] as u16 + ((bin[16] as u16) << 8);
-            let octets: [u8; 16] = bin[0..16].try_into()?;
+            let octets: [u8; 16] = unsafe { bin[0..16].try_into().unwrap_unchecked() };
             let addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::from(octets)), port);
             Ok(addr)
         }
-        _ => Err(models_errors::BadAddress.into()),
+        _ => Err(models_errors::AddressError::BadAddressError),
     }
 }
 
@@ -241,9 +241,9 @@ pub fn dump_addresses(addrs: &[SocketAddr]) -> (Option<Vec<u8>>, Option<Vec<u8>>
     (ipv4_to_return, ipv6_to_return)
 }
 
-pub fn parse_ipv4(data: &[u8]) -> ResultSmall<Vec<SocketAddr>> {
+pub fn parse_ipv4(data: &[u8]) -> Result<Vec<SocketAddr>, AddressError> {
     if data.len() % 6 != 0 {
-        return Err(models_errors::WrongSizeIPv4.into());
+        return Err(AddressError::WronSizeIPv4Error);
     }
     let mut to_return: Vec<SocketAddr> = Vec::with_capacity(data.len() / 6);
 
@@ -264,15 +264,17 @@ pub fn parse_ipv4(data: &[u8]) -> ResultSmall<Vec<SocketAddr>> {
     Ok(to_return)
 }
 
-pub fn parse_ipv6(data: &[u8]) -> ResultSmall<Vec<SocketAddr>> {
+pub fn parse_ipv6(data: &[u8]) -> Result<Vec<SocketAddr>, AddressError> {
     if data.len() % 18 != 0 {
-        return Err(models_errors::WrongSizeIPv6.into());
+        return Err(AddressError::WrongSizeIPv6Error);
     }
     let mut to_return: Vec<SocketAddr> = Vec::with_capacity(data.len() / 18);
 
     for index in (0..data.len()).step_by(18) {
         let port: u16 = data[index + 17] as u16 + ((data[index + 16] as u16) << 8);
-        let octets: [u8; 16] = data[index..index + 16].try_into()?;
+        let octets: [u8; 16] = data[index..index + 16]
+            .try_into()
+            .map_err(|_| AddressError::WrongSizeIPv6Error)?;
         let addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::from(octets)), port);
         to_return.push(addr);
     }

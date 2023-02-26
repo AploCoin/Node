@@ -1,19 +1,16 @@
 use std::collections::HashSet;
 use std::net::SocketAddr;
 
-use chacha20::cipher::StreamCipher;
-use chacha20::cipher::StreamCipherSeek;
+use crate::errors::node_errors::NodeError;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::broadcast::Sender;
 
 use crate::config::*;
+use crate::encsocket::EncSocket;
 use crate::errors::*;
 use crate::models;
 use crate::models::*;
-use chacha20::cipher::KeyIvInit;
-use chacha20::ChaCha20;
 use lazy_static::lazy_static;
-use rand_core::OsRng;
 use rmp_serde::{Deserializer, Serializer};
 use serde::Deserialize;
 use serde::Serialize;
@@ -21,33 +18,15 @@ use std::fs::File;
 use std::io::prelude::*;
 use std::io::Cursor;
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 use tokio::time::Duration;
-use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret};
 
 lazy_static! {
     static ref PEER_TIMEOUT: Duration = Duration::from_secs(15);
 }
 
 const PEERS_BACKUP_FILE: &str = "peers.dump";
-
-macro_rules! read_exact {
-    ($sock:expr, $buf:expr, $propagate:expr) => {
-        loop {
-            let _ = tokio::select! {
-                _msg = $propagate.recv() =>{
-                    continue;
-                },
-                res = $sock.read_exact(&mut $buf) => {
-                    res?;
-                    break;
-                }
-            };
-        }
-    };
-}
 
 pub async fn load_peers(peers_mut: Arc<Mutex<HashSet<SocketAddr>>>) -> ResultSmall<()> {
     let file = File::open(PEERS_BACKUP_FILE)?;
@@ -127,22 +106,14 @@ pub async fn start(
         }
     };
 
-    let listener = match TcpListener::bind(*SERVER_ADDRESS).await {
-        Ok(s) => s,
-        Err(e) => {
-            return Err(node_errors::NodeError::new(e.to_string()));
-        }
-    };
+    let listener = TcpListener::bind(*SERVER_ADDRESS)
+        .await
+        .map_err(|e| NodeError::BindSocketError(e))?;
 
     loop {
         let (sock, addr) = tokio::select! {
             res = listener.accept() => {
-                match res{
-                    Ok(s) => s,
-                    Err(e) => {
-                        return Err(node_errors::NodeError::new(e.to_string()));
-                    }
-                }
+                res.map_err(|e| NodeError::AcceptConnectionError(e))?
             },
             _ = rx.recv() => {
                 shutdown.send(0).unwrap();
@@ -189,40 +160,29 @@ async fn handle_incoming(
 
 /// Wrapped main body of incoming connection handler
 async fn handle_incoming_wrapped(
-    mut socket: TcpStream,
+    socket: TcpStream,
     addr: SocketAddr,
     mut propagate: Sender<packet_models::Packet>,
     peers: Arc<Mutex<HashSet<SocketAddr>>>,
     mut new_peers_tx: Sender<SocketAddr>,
-) -> Result<(), node_errors::NodeError> {
+) -> Result<(), NodeError> {
     let mut rx_propagate = propagate.subscribe();
 
     let mut waiting_response: HashSet<u64> = HashSet::with_capacity(20);
 
-    // start keys exchanging process
-    let (nonce, shared) = exchange_keys(&mut socket).await?;
-
-    // get cipher
-    let mut cipher = ChaCha20::new(shared.as_bytes().into(), &nonce.into());
+    let mut socket = EncSocket::new_connection(socket, addr)
+        .await
+        .map_err(|e| NodeError::ConnectToPeerError(addr, e))?;
 
     // main loop
     loop {
-        let packet = match tokio::time::timeout(
-            *PEER_TIMEOUT,
-            receive_packet(&mut socket, &mut cipher, &mut rx_propagate),
-        )
-        .await
-        {
-            Ok(r) => match r {
-                Ok(p) => p,
-                Err(e) => {
-                    return Err(node_errors::NodeError::new(e.to_string()));
-                }
+        let packet = tokio::select! {
+            propagate_message = rx_propagate.recv() => {
+                socket.send(propagate_message.map_err(|e| NodeError::PropagationReadError(addr, e))?).await.map_err(|e| NodeError::SendPacketError(addr, e))?;
+                continue;
             },
-            Err(_) => {
-                return Err(node_errors::NodeError::new(
-                    "Connection Timed Out".to_string(),
-                ))
+            packet = socket.recv::<packet_models::Packet>() => {
+                packet.map_err(|e| NodeError::ReceievePacketError(addr, e))?
             }
         };
 
@@ -231,7 +191,6 @@ async fn handle_incoming_wrapped(
             &mut socket,
             packet,
             &mut waiting_response,
-            &mut cipher,
             peers.clone(),
             &mut propagate,
             &mut new_peers_tx,
@@ -242,86 +201,6 @@ async fn handle_incoming_wrapped(
             break;
         }
     }
-
-    Ok(())
-}
-
-/// Exchange keys with connection, server side
-async fn exchange_keys(
-    socket: &mut TcpStream,
-) -> Result<([u8; 12], SharedSecret), node_errors::NodeError> {
-    let mut buf = [0; 32];
-    let secret = EphemeralSecret::new(OsRng);
-    let public = PublicKey::from(&secret);
-
-    if let Err(e) = socket.write(public.as_bytes()).await {
-        return Err(node_errors::NodeError::new(e.to_string()));
-    };
-
-    if let Err(e) = socket.read_exact(&mut buf).await {
-        return Err(node_errors::NodeError::new(e.to_string()));
-    };
-
-    let other_public = PublicKey::from(buf);
-    let shared = secret.diffie_hellman(&other_public);
-
-    let nonce = [0u8; 12];
-
-    Ok((nonce, shared))
-}
-
-async fn receive_packet(
-    socket: &mut TcpStream,
-    cipher: &mut ChaCha20,
-    propagate: &mut Receiver<packet_models::Packet>,
-) -> ResultSmall<packet_models::Packet> {
-    // read size of the packet
-    let mut recv_buffer = [0u8; 4];
-    read_exact!(socket, recv_buffer, propagate);
-    let packet_size = u32::from_be_bytes(recv_buffer) as usize;
-
-    // read actual packet
-    let mut recv_buffer = vec![0u8; packet_size];
-    read_exact!(socket, recv_buffer, propagate);
-
-    // decrypt packet
-    cipher.apply_keystream(&mut recv_buffer);
-    cipher.seek(0);
-
-    // uncompress packet
-    let mut decoded_data: Vec<u8> = Vec::with_capacity(packet_size);
-    let cur = Cursor::new(recv_buffer);
-    let mut decoder = zstd::Decoder::new(cur)?;
-    decoder.read_to_end(&mut decoded_data)?;
-
-    // deserialize packet
-    let packet =
-        packet_models::Packet::deserialize(&mut Deserializer::new(Cursor::new(decoded_data)))?;
-
-    Ok(packet)
-}
-
-async fn send_packet(
-    socket: &mut TcpStream,
-    cipher: &mut ChaCha20,
-    packet: packet_models::Packet,
-) -> ResultSmall<()> {
-    let mut buf: Vec<u8> = Vec::with_capacity(100);
-
-    packet.serialize(&mut Serializer::new(&mut buf)).unwrap();
-
-    let mut encoded_data: Vec<u8> = vec![0u8; buf.len()];
-    let cur = Cursor::new(&mut encoded_data);
-    let mut encoder = zstd::Encoder::new(cur, 21)?;
-    encoder.write_all(&buf)?;
-    encoder.finish()?;
-
-    cipher.apply_keystream(&mut encoded_data);
-    cipher.seek(0);
-
-    let packet_size = &(encoded_data.len() as u32).to_be_bytes();
-    socket.write_all(packet_size).await?;
-    socket.write_all(&encoded_data).await?;
 
     Ok(())
 }
@@ -343,30 +222,6 @@ async fn connect_to_peers(
             new_peers_tx.clone(),
         ));
     }
-}
-
-/// Exchange keys with connection, client side
-async fn exchange_keys_client(
-    socket: &mut TcpStream,
-) -> Result<([u8; 12], SharedSecret), node_errors::NodeError> {
-    let mut buf = [0; 32];
-    let secret = EphemeralSecret::new(OsRng);
-    let public = PublicKey::from(&secret);
-
-    if let Err(e) = socket.read_exact(&mut buf).await {
-        return Err(node_errors::NodeError::new(e.to_string()));
-    };
-
-    if let Err(e) = socket.write(public.as_bytes()).await {
-        return Err(node_errors::NodeError::new(e.to_string()));
-    };
-
-    let other_public = PublicKey::from(buf);
-    let shared = secret.diffie_hellman(&other_public);
-
-    let nonce = [0u8; 12];
-
-    Ok((nonce, shared))
 }
 
 pub async fn connect_to_peer(
@@ -397,25 +252,13 @@ pub async fn handle_peer(
     peers_mut: Arc<Mutex<HashSet<SocketAddr>>>,
     mut propagate: Sender<packet_models::Packet>,
     mut new_peers_tx: Sender<SocketAddr>,
-) -> Result<(), node_errors::NodeError> {
+) -> Result<(), NodeError> {
     // set up
     let mut rx_propagate = propagate.subscribe();
 
-    let mut socket =
-        if let Ok(Ok(s)) = tokio::time::timeout(*PEER_TIMEOUT, TcpStream::connect(addr)).await {
-            s
-        } else {
-            return Err(node_errors::NodeError::new("Connection error".to_string()));
-        };
-
-    // get cipher
-    let (nonce, shared) = match exchange_keys_client(&mut socket).await {
-        Ok(d) => d,
-        Err(e) => {
-            return Err(e);
-        }
-    };
-    let mut cipher = ChaCha20::new(shared.as_bytes().into(), &nonce.into());
+    let mut socket = EncSocket::create_new_connection(addr.clone(), *PEER_TIMEOUT)
+        .await
+        .map_err(|e| NodeError::ConnectToPeerError(*addr, e))?;
 
     let mut waiting_response: HashSet<u64> = HashSet::with_capacity(20);
 
@@ -427,16 +270,20 @@ pub async fn handle_peer(
         packet_models::AnnounceRequest { id, addr: body },
     ));
 
-    if let Err(e) = send_packet(&mut socket, &mut cipher, packet).await {
-        return Err(node_errors::NodeError::new(e.to_string()));
-    };
+    socket
+        .send(packet)
+        .await
+        .map_err(|e| NodeError::SendPacketError(*addr, e))?;
 
     // main loop
     loop {
-        let packet = match receive_packet(&mut socket, &mut cipher, &mut rx_propagate).await {
-            Ok(p) => p,
-            Err(e) => {
-                return Err(node_errors::NodeError::new(e.to_string()));
+        let packet = tokio::select! {
+            propagate_message = rx_propagate.recv() => {
+                socket.send(propagate_message.map_err(|e| NodeError::PropagationReadError(*addr, e))?).await.map_err(|e| NodeError::SendPacketError(*addr, e))?;
+                continue;
+            },
+            packet = socket.recv::<packet_models::Packet>() => {
+                packet.map_err(|e| NodeError::ReceievePacketError(*addr, e))?
             }
         };
 
@@ -445,7 +292,6 @@ pub async fn handle_peer(
             &mut socket,
             packet,
             &mut waiting_response,
-            &mut cipher,
             peers_mut.clone(),
             &mut propagate,
             &mut new_peers_tx,
@@ -461,18 +307,17 @@ pub async fn handle_peer(
 }
 
 async fn process_packet(
-    socket: &mut TcpStream,
+    socket: &mut EncSocket,
     packet: packet_models::Packet,
     waiting_response: &mut HashSet<u64>,
-    cipher: &mut ChaCha20,
     peers_mut: Arc<Mutex<HashSet<SocketAddr>>>,
     propagate: &mut Sender<packet_models::Packet>,
     new_peers_tx: &mut Sender<SocketAddr>,
-) -> ResultSmall<()> {
+) -> Result<(), NodeError> {
     match &packet {
         packet_models::Packet::request(r) => match r {
             packet_models::Request::announce(p) => {
-                let addr = bin2addr(&p.addr)?;
+                let addr = bin2addr(&p.addr).map_err(|e| NodeError::BinToAddressError(e))?;
 
                 // verify address is not loopback
                 if (addr.ip().is_loopback() && addr.port() == SERVER_ADDRESS.port())
@@ -481,7 +326,10 @@ async fn process_packet(
                     let response_packet = packet_models::Packet::error(packet_models::ErrorR {
                         code: packet_models::ErrorCode::BadAddress,
                     });
-                    send_packet(socket, cipher, response_packet).await?;
+                    socket
+                        .send(response_packet)
+                        .await
+                        .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
 
                     return Ok(());
                 }
@@ -491,8 +339,12 @@ async fn process_packet(
                 drop(peers);
 
                 if res {
-                    propagate.send(packet)?;
-                    new_peers_tx.send(addr)?;
+                    propagate
+                        .send(packet)
+                        .map_err(|e| NodeError::PropagationSendError(addr, e.to_string()))?;
+                    new_peers_tx
+                        .send(addr)
+                        .map_err(|e| NodeError::PropagationSendError(addr, e.to_string()))?;
                 }
             }
             packet_models::Request::get_amount(p) => {}
@@ -519,7 +371,11 @@ async fn process_packet(
                         ipv6,
                     },
                 ));
-                send_packet(socket, cipher, packet).await?;
+
+                socket
+                    .send(packet)
+                    .await
+                    .map_err(|e| NodeError::SendPacketError(socket.addr, e))?
             }
             packet_models::Request::get_transaction(p) => {}
         },

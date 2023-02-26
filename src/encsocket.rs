@@ -12,6 +12,7 @@ use std::io::Cursor;
 use std::net::SocketAddr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::time::Duration;
 use x25519_dalek::{EphemeralSecret, PublicKey};
 
 static MAX_PACKET_SIZE: usize = 5242880; // size in bytes
@@ -23,6 +24,7 @@ pub struct EncSocket {
 }
 
 impl EncSocket {
+    #[allow(dead_code)]
     pub fn new(socket: TcpStream, cipher: ChaCha20, addr: SocketAddr) -> EncSocket {
         EncSocket {
             socket,
@@ -116,6 +118,21 @@ impl EncSocket {
             cipher,
             addr,
         })
+    }
+
+    pub async fn create_new_connection(
+        addr: SocketAddr,
+        timeout: Duration,
+    ) -> Result<EncSocket, EncSocketError> {
+        let stream = tokio::time::timeout(timeout, TcpStream::connect(addr))
+            .await
+            .map_err(|_| EncSocketError::TimeoutError)?
+            .map_err(|e| EncSocketError::ConnectError {
+                address: addr,
+                reason: e,
+            })?;
+
+        EncSocket::establish_new_connection(stream, addr).await
     }
 
     pub async fn recv_raw(&mut self) -> Result<(usize, Vec<u8>), EncSocketError> {
