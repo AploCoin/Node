@@ -15,68 +15,57 @@ pub mod packet_models {
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
     #[serde(tag = "type")]
     pub enum Packet {
-        #[allow(non_camel_case_types)]
-        request(Request),
-
-        #[allow(non_camel_case_types)]
-        response(Response),
-
-        #[allow(non_camel_case_types)]
-        error(ErrorR),
+        Request(Request),
+        Response(Response),
+        Error(ErrorR),
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
     #[serde(tag = "q")]
     pub enum Request {
-        #[allow(non_camel_case_types)]
-        get_nodes(GetNodesRequest),
-
-        #[allow(non_camel_case_types)]
-        get_amount(GetAmountRequest),
-
-        #[allow(non_camel_case_types)]
-        get_transaction(GetTransactionRequest),
-
-        #[allow(non_camel_case_types)]
-        announce(AnnounceRequest),
+        GetNodes(GetNodesRequest),
+        GetAmount(GetAmountRequest),
+        GetTransaction(GetTransactionRequest),
+        Announce(AnnounceRequest),
+        Ping(PingRequest),
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
-    #[allow(non_camel_case_types)]
     pub struct GetNodesRequest {
         pub id: u64,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
-    #[allow(non_camel_case_types)]
     pub struct GetAmountRequest {
         pub id: u64,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
-    #[allow(non_camel_case_types)]
     pub struct GetTransactionRequest {
         pub id: u64,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
-    #[allow(non_camel_case_types)]
     pub struct AnnounceRequest {
         pub id: u64,
         pub addr: Vec<u8>,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+    pub struct PingRequest {
+        pub id: u64,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
     #[serde(tag = "r")]
     pub enum Response {
-        #[allow(non_camel_case_types)]
-        get_nodes(GetNodesReponse),
+        GetNodes(GetNodesReponse),
 
-        #[allow(non_camel_case_types)]
-        get_amount(GetAmountReponse),
+        GetAmount(GetAmountReponse),
 
-        #[allow(non_camel_case_types)]
-        get_transaction(GetTransactionResponse),
+        GetTransaction(GetTransactionResponse),
+
+        Ping(PingResponse),
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -103,6 +92,11 @@ pub mod packet_models {
         pub transaction: Vec<u8>,
     }
 
+    #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+    pub struct PingResponse {
+        pub id: u64,
+    }
+
     #[cfg(test)]
     mod packet_tests {
         use super::*;
@@ -113,7 +107,7 @@ pub mod packet_models {
         fn test_error() {
             let mut buf: Vec<u8> = Vec::new();
 
-            let obj = Packet::error(ErrorR {
+            let obj = Packet::Error(ErrorR {
                 code: ErrorCode::ParseError,
             });
 
@@ -137,7 +131,7 @@ pub mod packet_models {
             addr.push(0);
             addr.push(255);
 
-            let obj = Packet::request(Request::announce(AnnounceRequest { id: 20, addr }));
+            let obj = Packet::Request(Request::Announce(AnnounceRequest { id: 20, addr }));
 
             obj.serialize(&mut Serializer::new(&mut buf)).unwrap();
 

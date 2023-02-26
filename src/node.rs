@@ -21,6 +21,7 @@ use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 use tokio::time::Duration;
+use tracing::{debug, error, info};
 
 lazy_static! {
     static ref PEER_TIMEOUT: Duration = Duration::from_secs(15);
@@ -266,7 +267,7 @@ pub async fn handle_peer(
     let id: u64 = rand::random();
 
     let body = models::addr2bin(&SERVER_ADDRESS);
-    let packet = packet_models::Packet::request(packet_models::Request::announce(
+    let packet = packet_models::Packet::Request(packet_models::Request::Announce(
         packet_models::AnnounceRequest { id, addr: body },
     ));
 
@@ -315,15 +316,21 @@ async fn process_packet(
     new_peers_tx: &mut Sender<SocketAddr>,
 ) -> Result<(), NodeError> {
     match &packet {
-        packet_models::Packet::request(r) => match r {
-            packet_models::Request::announce(p) => {
+        packet_models::Packet::Request(r) => match r {
+            packet_models::Request::Ping(p) => socket
+                .send(packet_models::Packet::Response(
+                    packet_models::Response::Ping(packet_models::PingResponse { id: p.id }),
+                ))
+                .await
+                .map_err(|e| NodeError::SendPacketError(socket.addr, e))?,
+            packet_models::Request::Announce(p) => {
                 let addr = bin2addr(&p.addr).map_err(|e| NodeError::BinToAddressError(e))?;
 
                 // verify address is not loopback
                 if (addr.ip().is_loopback() && addr.port() == SERVER_ADDRESS.port())
                     || addr.ip().is_unspecified()
                 {
-                    let response_packet = packet_models::Packet::error(packet_models::ErrorR {
+                    let response_packet = packet_models::Packet::Error(packet_models::ErrorR {
                         code: packet_models::ErrorCode::BadAddress,
                     });
                     socket
@@ -347,8 +354,8 @@ async fn process_packet(
                         .map_err(|e| NodeError::PropagationSendError(addr, e.to_string()))?;
                 }
             }
-            packet_models::Request::get_amount(p) => {}
-            packet_models::Request::get_nodes(p) => {
+            packet_models::Request::GetAmount(p) => {}
+            packet_models::Request::GetNodes(p) => {
                 let mut peers_cloned: Box<[SocketAddr]>;
                 {
                     // clone peers into vec
@@ -364,7 +371,7 @@ async fn process_packet(
                 // dump ipv4 and ipv6 addresses in u8 vecs separately
                 let (ipv4, ipv6) = dump_addresses(&peers_cloned);
 
-                let packet = packet_models::Packet::response(packet_models::Response::get_nodes(
+                let packet = packet_models::Packet::Response(packet_models::Response::GetNodes(
                     packet_models::GetNodesReponse {
                         id: p.id,
                         ipv4,
@@ -377,10 +384,10 @@ async fn process_packet(
                     .await
                     .map_err(|e| NodeError::SendPacketError(socket.addr, e))?
             }
-            packet_models::Request::get_transaction(p) => {}
+            packet_models::Request::GetTransaction(p) => {}
         },
-        packet_models::Packet::response(r) => {}
-        packet_models::Packet::error(e) => {}
+        packet_models::Packet::Response(r) => {}
+        packet_models::Packet::Error(e) => {}
     }
 
     Ok(())

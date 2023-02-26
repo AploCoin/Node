@@ -20,5 +20,7 @@ rand = ">=0.8.5"
 serde_json = ">=1" 
 dotenv = ">=0.15"
 blockchaintree = {git = "https://github.com/AploCoin/BlockChainTree", branch = "main"}
-anyhow = "1.0.69"
 sha2 = "0.10.6"
+tracing = "0.1.37"
+tracing-appender = "0.2.2"
+tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
