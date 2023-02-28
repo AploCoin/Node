@@ -11,6 +11,7 @@ use crate::errors::*;
 use crate::models;
 use crate::models::*;
 use blockchaintree::blockchaintree::BlockChainTree;
+use blockchaintree::transaction::Transactionable;
 use lazy_static::lazy_static;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
@@ -435,8 +436,35 @@ async fn process_packet(
                     .await
                     .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
             }
-            packet_models::Request::GetBlocksByHeights(p) => {
-                // doesn't use encryption, for the sake of making transmition faster
+            packet_models::Request::GetBlocksByHeights(p) => {}
+            packet_models::Request::NewTransaction(p) => {
+                if p.transaction.len() < 4 {
+                    return Err(NodeError::BadTransactionSizeError);
+                }
+                let transaction_size: u32 = u32::from_be_bytes(unsafe {
+                    p.transaction[0..4].try_into().unwrap_unchecked()
+                });
+                if p.transaction.len() - 4 != transaction_size as usize {
+                    return Err(NodeError::BadTransactionSizeError);
+                }
+
+                let transaction = blockchaintree::transaction::Transaction::parse(
+                    &p.transaction[4..],
+                    transaction_size as u64,
+                )
+                .map_err(|e| NodeError::ParseTransactionError(e.to_string()))?;
+
+                blockchain
+                    .new_transaction(transaction)
+                    .await
+                    .map_err(|e| NodeError::CreateTransactionError(e.to_string()))?;
+
+                socket
+                    .send(packet_models::Response::Ok(packet_models::OkResponse {
+                        id: p.id,
+                    }))
+                    .await
+                    .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
             }
         },
         packet_models::Packet::Response(r) => {}

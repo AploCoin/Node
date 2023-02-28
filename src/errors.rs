@@ -87,6 +87,15 @@ pub mod node_errors {
 
         #[error("Error getting block from blockchain: {0:?}")]
         GetBlockError(String),
+
+        #[error("Error parsing transaction, bad size")]
+        BadTransactionSizeError,
+
+        #[error("Error parsing transaction: {0:?}")]
+        ParseTransactionError(String),
+
+        #[error("Error creating transaction: {0:?}")]
+        CreateTransactionError(String),
     }
 
     #[derive(Debug, Clone, Error)]
