@@ -31,6 +31,7 @@ pub mod packet_models {
         Announce(AnnounceRequest),
         Ping(PingRequest),
         GetBlockByHash(GetBlockByHashRequest),
+        GetBlockByHeight(GetBlockByHeightRequest),
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -56,6 +57,12 @@ pub mod packet_models {
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+    pub struct GetBlockByHeightRequest {
+        pub id: u64,
+        pub height: u64,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
     pub struct AnnounceRequest {
         pub id: u64,
         pub addr: Vec<u8>,
@@ -77,7 +84,7 @@ pub mod packet_models {
 
         Ping(PingResponse),
 
-        GetBlockByHash(GetBlockByHashResponse),
+        GetBlock(GetBlockResponse),
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -99,7 +106,7 @@ pub mod packet_models {
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
-    pub struct GetBlockByHashResponse {
+    pub struct GetBlockResponse {
         pub id: u64,
         pub dump: Option<Vec<u8>>,
     }

@@ -404,8 +404,30 @@ async fn process_packet(
                 };
 
                 socket
-                    .send(packet_models::Response::GetBlockByHash(
-                        packet_models::GetBlockByHashResponse {
+                    .send(packet_models::Response::GetBlock(
+                        packet_models::GetBlockResponse {
+                            id: p.id,
+                            dump: block_dump,
+                        },
+                    ))
+                    .await
+                    .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
+            }
+            packet_models::Request::GetBlockByHeight(p) => {
+                let block_dump = match blockchain.get_main_chain().find_by_height(p.height).await {
+                    Err(e) => {
+                        return Err(NodeError::GetBlockError(e.to_string()));
+                    }
+                    Ok(Some(block)) => Some(
+                        block
+                            .dump()
+                            .map_err(|e| NodeError::GetBlockError(e.to_string()))?,
+                    ),
+                    Ok(None) => None,
+                };
+                socket
+                    .send(packet_models::Response::GetBlock(
+                        packet_models::GetBlockResponse {
                             id: p.id,
                             dump: block_dump,
                         },
