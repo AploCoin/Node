@@ -435,6 +435,9 @@ async fn process_packet(
                     .await
                     .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
             }
+            packet_models::Request::GetBlocksByHeights(p) => {
+                // doesn't use encryption, for the sake of making transmition faster
+            }
         },
         packet_models::Packet::Response(r) => {}
         packet_models::Packet::Error(e) => {

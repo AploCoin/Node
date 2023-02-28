@@ -32,6 +32,7 @@ pub mod packet_models {
         Ping(PingRequest),
         GetBlockByHash(GetBlockByHashRequest),
         GetBlockByHeight(GetBlockByHeightRequest),
+        GetBlocksByHeights(GetBlocksByHeightsRequest),
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -63,6 +64,12 @@ pub mod packet_models {
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+    pub struct GetBlocksByHeightsRequest {
+        pub id: u64,
+        pub heights: Vec<u64>,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
     pub struct AnnounceRequest {
         pub id: u64,
         pub addr: Vec<u8>,
@@ -77,13 +84,9 @@ pub mod packet_models {
     #[serde(tag = "r")]
     pub enum Response {
         GetNodes(GetNodesReponse),
-
         GetAmount(GetAmountResponse),
-
         GetTransaction(GetTransactionResponse),
-
         Ping(PingResponse),
-
         GetBlock(GetBlockResponse),
     }
 
@@ -110,6 +113,12 @@ pub mod packet_models {
         pub id: u64,
         pub dump: Option<Vec<u8>>,
     }
+
+    // #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+    // pub struct GetBlocksResponse {
+    //     pub id: u64,
+    //     pub dump: Option<Vec<u8>>,
+    // }
 
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
     pub struct GetTransactionResponse {
