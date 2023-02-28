@@ -90,12 +90,18 @@ async fn main() -> errors::ResultSmall<()> {
         tx.clone(),
         txp.clone(),
         new_peers_tx.clone(),
-        blockchain,
+        blockchain.clone(),
     );
     tokio::spawn(fut);
 
     debug!("Starting connecting new peers task");
-    let fut = node::connect_new_peers(tx.clone(), peers.clone(), txp.clone(), new_peers_tx);
+    let fut = node::connect_new_peers(
+        tx.clone(),
+        peers.clone(),
+        txp.clone(),
+        new_peers_tx,
+        blockchain,
+    );
     tokio::spawn(fut);
 
     info!("Node started");

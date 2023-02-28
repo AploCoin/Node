@@ -21,6 +21,7 @@ pub mod models_errors {
 pub mod node_errors {
     use super::enc_socket_errors::EncSocketError;
     use super::*;
+    use crate::models::packet_models::ErrorR;
     use getrandom::Error as grandErr;
     use std::io;
     use std::net::SocketAddr;
@@ -74,6 +75,15 @@ pub mod node_errors {
 
         #[error("Error binding socket: {0:?}")]
         BindSocketError(io::Error),
+
+        #[error("Error returned from remote node: {0:?}")]
+        RemoteNodeError(ErrorR),
+
+        #[error("Address in blockchain should have size of 33 bytes, the supplied address had size: {0}")]
+        BadBlockchainAddressSizeError(usize),
+
+        #[error("Error getting funds from blockchain: {0:?}")]
+        GetFundsError(String),
     }
 
     #[derive(Debug, Clone, Error)]

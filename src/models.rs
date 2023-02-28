@@ -10,6 +10,8 @@ pub mod packet_models {
     pub enum ErrorCode {
         ParseError = 1,
         BadAddress,
+        BadBlockchainAddress,
+        UnexpectedInternalError,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -38,6 +40,7 @@ pub mod packet_models {
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
     pub struct GetAmountRequest {
         pub id: u64,
+        pub address: Vec<u8>,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -61,7 +64,7 @@ pub mod packet_models {
     pub enum Response {
         GetNodes(GetNodesReponse),
 
-        GetAmount(GetAmountReponse),
+        GetAmount(GetAmountResponse),
 
         GetTransaction(GetTransactionResponse),
 
@@ -81,9 +84,9 @@ pub mod packet_models {
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
-    pub struct GetAmountReponse {
+    pub struct GetAmountResponse {
         pub id: u64,
-        pub amount: Option<Vec<u8>>,
+        pub amount: Vec<u8>,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]

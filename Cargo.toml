@@ -24,3 +24,4 @@ sha2 = "0.10.6"
 tracing = "0.1.37"
 tracing-appender = "0.2.2"
 tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
+error-stack = "0.3.1"

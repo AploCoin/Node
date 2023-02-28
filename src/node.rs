@@ -37,7 +37,8 @@ pub async fn start(
             peers_mut.clone(),
             shutdown.clone(),
             propagate.clone(),
-            new_peers_tx.clone()
+            new_peers_tx.clone(),
+            blockchain.clone()
         ) => {},
         _ = rx.recv() => {
             return Ok(());
@@ -67,6 +68,7 @@ pub async fn start(
             propagate.clone(),
             peers_mut.clone(),
             new_peers_tx.clone(),
+            blockchain.clone(),
         ));
     }
 
@@ -81,6 +83,7 @@ async fn handle_incoming(
     propagate: Sender<packet_models::Packet>,
     peers: Arc<Mutex<HashSet<SocketAddr>>>,
     new_peers_tx: Sender<SocketAddr>,
+    blockchain: Arc<BlockChainTree>,
 ) -> Result<(), node_errors::NodeError> {
     let mut rx = shutdown.subscribe();
     tokio::select! {
@@ -89,7 +92,8 @@ async fn handle_incoming(
             addr,
             propagate,
             peers,
-            new_peers_tx) => res,
+            new_peers_tx,
+            blockchain) => res,
         _ = rx.recv() => {
             Ok(())
         }
@@ -103,6 +107,7 @@ async fn handle_incoming_wrapped(
     mut propagate: Sender<packet_models::Packet>,
     peers: Arc<Mutex<HashSet<SocketAddr>>>,
     mut new_peers_tx: Sender<SocketAddr>,
+    blockchain: Arc<BlockChainTree>,
 ) -> Result<(), NodeError> {
     let mut rx_propagate = propagate.subscribe();
 
@@ -132,6 +137,7 @@ async fn handle_incoming_wrapped(
             peers.clone(),
             &mut propagate,
             &mut new_peers_tx,
+            &blockchain,
         )
         .await
         .is_err()
@@ -148,6 +154,7 @@ async fn connect_to_peers(
     shutdown: Sender<u8>,
     propagate: Sender<packet_models::Packet>,
     new_peers_tx: Sender<SocketAddr>,
+    blockchain: Arc<BlockChainTree>,
 ) {
     let peers = peers_mut.lock().await;
 
@@ -158,6 +165,7 @@ async fn connect_to_peers(
             shutdown.clone(),
             propagate.clone(),
             new_peers_tx.clone(),
+            blockchain.clone(),
         ));
     }
 }
@@ -168,6 +176,7 @@ pub async fn connect_to_peer(
     shutdown: Sender<u8>,
     propagate: Sender<packet_models::Packet>,
     new_peers_tx: Sender<SocketAddr>,
+    blockchain: Arc<BlockChainTree>,
 ) {
     let mut rx = shutdown.subscribe();
     tokio::select! {
@@ -176,7 +185,8 @@ pub async fn connect_to_peer(
             &addr,
             peers_mut.clone(),
             propagate,
-            new_peers_tx
+            new_peers_tx,
+            blockchain
         ) => {}
     };
 
@@ -190,6 +200,7 @@ pub async fn handle_peer(
     peers_mut: Arc<Mutex<HashSet<SocketAddr>>>,
     mut propagate: Sender<packet_models::Packet>,
     mut new_peers_tx: Sender<SocketAddr>,
+    blockchain: Arc<BlockChainTree>,
 ) -> Result<(), NodeError> {
     // set up
     let mut rx_propagate = propagate.subscribe();
@@ -233,6 +244,7 @@ pub async fn handle_peer(
             peers_mut.clone(),
             &mut propagate,
             &mut new_peers_tx,
+            &blockchain,
         )
         .await
         .is_err()
@@ -251,6 +263,7 @@ async fn process_packet(
     peers_mut: Arc<Mutex<HashSet<SocketAddr>>>,
     propagate: &mut Sender<packet_models::Packet>,
     new_peers_tx: &mut Sender<SocketAddr>,
+    blockchain: &Arc<BlockChainTree>,
 ) -> Result<(), NodeError> {
     match &packet {
         packet_models::Packet::Request(r) => match r {
@@ -291,7 +304,56 @@ async fn process_packet(
                         .map_err(|e| NodeError::PropagationSendError(addr, e.to_string()))?;
                 }
             }
-            packet_models::Request::GetAmount(p) => {}
+            packet_models::Request::GetAmount(p) => {
+                if p.address.len() != 33 {
+                    socket
+                        .send(packet_models::Packet::Error(packet_models::ErrorR {
+                            code: packet_models::ErrorCode::BadBlockchainAddress,
+                        }))
+                        .await
+                        .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
+                    return Err(NodeError::BadBlockchainAddressSizeError(p.address.len()));
+                }
+
+                let address: [u8; 33] =
+                    unsafe { p.to_owned().address.try_into().unwrap_unchecked() };
+
+                let funds = match blockchain.get_funds(&address) {
+                    Err(e) => {
+                        socket
+                            .send(packet_models::Packet::Error(packet_models::ErrorR {
+                                code: packet_models::ErrorCode::UnexpectedInternalError,
+                            }))
+                            .await
+                            .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
+
+                        return Err(NodeError::GetFundsError(e.to_string()));
+                    }
+                    Ok(funds) => funds,
+                };
+
+                let mut funds_dumped: Vec<u8> = Vec::new();
+                if let Err(e) = blockchaintree::tools::dump_biguint(&funds, &mut funds_dumped) {
+                    socket
+                        .send(packet_models::Packet::Error(packet_models::ErrorR {
+                            code: packet_models::ErrorCode::UnexpectedInternalError,
+                        }))
+                        .await
+                        .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
+
+                    return Err(NodeError::GetFundsError(e.to_string()));
+                };
+
+                socket
+                    .send(packet_models::Response::GetAmount(
+                        packet_models::GetAmountResponse {
+                            id: p.id,
+                            amount: funds_dumped,
+                        },
+                    ))
+                    .await
+                    .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
+            }
             packet_models::Request::GetNodes(p) => {
                 let mut peers_cloned: Box<[SocketAddr]>;
                 {
@@ -324,7 +386,10 @@ async fn process_packet(
             packet_models::Request::GetTransaction(p) => {}
         },
         packet_models::Packet::Response(r) => {}
-        packet_models::Packet::Error(e) => {}
+        packet_models::Packet::Error(e) => {
+            error!("Node: {:?} returned error: {:?}", socket.addr, e);
+            return Err(NodeError::RemoteNodeError(e.clone()));
+        }
     }
 
     Ok(())
@@ -335,6 +400,7 @@ pub async fn connect_new_peers(
     peers_mut: Arc<Mutex<HashSet<SocketAddr>>>,
     propagate: Sender<packet_models::Packet>,
     new_peers_tx: Sender<SocketAddr>,
+    blockchain: Arc<BlockChainTree>,
 ) {
     let mut shutdown_watcher = shutdown.subscribe();
     let mut new_peers_rx = new_peers_tx.subscribe();
@@ -346,7 +412,8 @@ pub async fn connect_new_peers(
             propagate,
             shutdown.clone(),
             &mut new_peers_rx,
-            new_peers_tx
+            new_peers_tx,
+            blockchain
         ) => {}
     }
 }
@@ -357,6 +424,7 @@ async fn connect_new_peers_wrapped(
     shutdown: Sender<u8>,
     new_peers_rx: &mut Receiver<SocketAddr>,
     new_peers_tx: Sender<SocketAddr>,
+    blockchain: Arc<BlockChainTree>,
 ) {
     loop {
         let peer_addr = match new_peers_rx.recv().await {
@@ -380,6 +448,7 @@ async fn connect_new_peers_wrapped(
             shutdown.clone(),
             propagate.clone(),
             new_peers_tx.clone(),
+            blockchain.clone(),
         ));
     }
 }
