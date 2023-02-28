@@ -384,6 +384,35 @@ async fn process_packet(
                     .map_err(|e| NodeError::SendPacketError(socket.addr, e))?
             }
             packet_models::Request::GetTransaction(p) => {}
+            packet_models::Request::GetBlockByHash(p) => {
+                let block_dump = match blockchain.get_main_chain().find_by_hash(&p.hash).await {
+                    Err(e) => {
+                        // socket
+                        //     .send(packet_models::ErrorR {
+                        //         code: packet_models::ErrorCode::UnexpectedInternalError,
+                        //     })
+                        //     .await
+                        //     .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
+                        return Err(NodeError::GetBlockError(e.to_string()));
+                    }
+                    Ok(Some(block)) => Some(
+                        block
+                            .dump()
+                            .map_err(|e| NodeError::GetBlockError(e.to_string()))?,
+                    ),
+                    Ok(None) => None,
+                };
+
+                socket
+                    .send(packet_models::Response::GetBlockByHash(
+                        packet_models::GetBlockByHashResponse {
+                            id: p.id,
+                            dump: block_dump,
+                        },
+                    ))
+                    .await
+                    .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
+            }
         },
         packet_models::Packet::Response(r) => {}
         packet_models::Packet::Error(e) => {

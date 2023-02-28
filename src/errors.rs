@@ -84,6 +84,9 @@ pub mod node_errors {
 
         #[error("Error getting funds from blockchain: {0:?}")]
         GetFundsError(String),
+
+        #[error("Error getting block from blockchain: {0:?}")]
+        GetBlockError(String),
     }
 
     #[derive(Debug, Clone, Error)]
