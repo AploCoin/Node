@@ -133,7 +133,7 @@ async fn handle_incoming_wrapped(
         // handle packet
         if process_packet(
             &mut socket,
-            packet,
+            &packet,
             &mut waiting_response,
             peers.clone(),
             &mut propagate,
@@ -240,7 +240,7 @@ pub async fn handle_peer(
         // handle packet
         if process_packet(
             &mut socket,
-            packet,
+            &packet,
             &mut waiting_response,
             peers_mut.clone(),
             &mut propagate,
@@ -259,14 +259,14 @@ pub async fn handle_peer(
 
 async fn process_packet(
     socket: &mut EncSocket,
-    packet: packet_models::Packet,
+    packet: &packet_models::Packet,
     waiting_response: &mut HashSet<u64>,
     peers_mut: Arc<Mutex<HashSet<SocketAddr>>>,
     propagate: &mut Sender<packet_models::Packet>,
     new_peers_tx: &mut Sender<SocketAddr>,
     blockchain: &Arc<BlockChainTree>,
 ) -> Result<(), NodeError> {
-    match &packet {
+    match packet {
         packet_models::Packet::Request(r) => match r {
             packet_models::Request::Ping(p) => socket
                 .send(packet_models::Packet::Response(
@@ -298,7 +298,7 @@ async fn process_packet(
 
                 if res {
                     propagate
-                        .send(packet)
+                        .send(packet.clone())
                         .map_err(|e| NodeError::PropagationSendError(addr, e.to_string()))?;
                     new_peers_tx
                         .send(addr)
@@ -458,6 +458,10 @@ async fn process_packet(
                     .new_transaction(transaction)
                     .await
                     .map_err(|e| NodeError::CreateTransactionError(e.to_string()))?;
+
+                propagate
+                    .send(packet.clone())
+                    .map_err(|e| NodeError::PropagationSendError(socket.addr, e.to_string()))?;
 
                 socket
                     .send(packet_models::Response::Ok(packet_models::OkResponse {
