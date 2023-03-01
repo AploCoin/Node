@@ -73,7 +73,8 @@ pub mod packet_models {
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
     pub struct GetBlocksByHeightsRequest {
         pub id: u64,
-        pub heights: Vec<u64>,
+        pub start: u64,
+        pub end: u64,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
