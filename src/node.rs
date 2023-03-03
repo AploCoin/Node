@@ -17,6 +17,7 @@ use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 use tokio::time::Duration;
+#[allow(unused_imports)]
 use tracing::{debug, error, info};
 
 lazy_static! {
@@ -384,7 +385,28 @@ async fn process_packet(
                     .await
                     .map_err(|e| NodeError::SendPacketError(socket.addr, e))?
             }
-            packet_models::Request::GetTransaction(p) => {}
+            packet_models::Request::GetTransaction(p) => {
+                let packet = packet_models::Response::GetTransaction(
+                    packet_models::GetTransactionResponse {
+                        id: p.id,
+                        transaction: blockchain
+                            .get_main_chain()
+                            .find_transaction(&p.hash)
+                            .await
+                            .map_err(|e| NodeError::FindTransactionError(e.to_string()))?
+                            .map(|tr| {
+                                tr.dump()
+                                    .map_err(|e| NodeError::FindTransactionError(e.to_string()))
+                                    .unwrap() // TODO: remove unwrap
+                            }),
+                    },
+                );
+
+                socket
+                    .send(packet)
+                    .await
+                    .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
+            }
             packet_models::Request::GetBlockByHash(p) => {
                 let block_dump = match blockchain.get_main_chain().find_by_hash(&p.hash).await {
                     Err(e) => {

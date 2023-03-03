@@ -96,6 +96,9 @@ pub mod node_errors {
 
         #[error("Error creating transaction: {0:?}")]
         CreateTransactionError(String),
+
+        #[error("Error searching for transaction: {0:?}")]
+        FindTransactionError(String),
     }
 
     #[derive(Debug, Clone, Error)]
