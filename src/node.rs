@@ -57,12 +57,13 @@ pub async fn start(context: NodeContext) -> Result<(), node_errors::NodeError> {
                 res.map_err(|e| NodeError::AcceptConnectionError(e))?
             },
             _ = rx.recv() => {
+                debug!("Recieved shutdown command");
                 context.shutdown.send(0).unwrap();
                 break;
             }
         };
 
-        println!("New connection from: {}", addr);
+        info!("New connection from: {}", addr);
         tokio::spawn(handle_incoming(sock, addr, context.clone()));
     }
 
@@ -142,12 +143,15 @@ async fn handle_incoming_wrapped(
 async fn connect_to_peers(context: NodeContext) {
     let peers = context.peers.lock().await;
 
+    info!("Connecting to {} peers", peers.len());
+
     for peer in peers.iter() {
         tokio::spawn(connect_to_peer(*peer, context.clone()));
     }
 }
 
 pub async fn connect_to_peer(addr: SocketAddr, context: NodeContext) {
+    debug!("Connecting to peer: {}", &addr);
     let mut rx = context.shutdown.subscribe();
     tokio::select! {
         _ = rx.recv() => {},

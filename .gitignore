@@ -17,3 +17,4 @@ Cargo.lock
 peers.dump
 
 logs/
+BlockChainTree/

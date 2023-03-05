@@ -2,6 +2,13 @@ use crate::errors::{models_errors::AddressError, *};
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
+// #[repr(u8)]
+// #[derive(Clone)]
+// pub enum NodeCommand {
+//     Stop,
+//     Subscribed,
+// }
+
 pub mod packet_models {
     use super::*;
 

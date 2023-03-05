@@ -20,6 +20,12 @@ use tracing_subscriber::{fmt, layer::SubscriberExt, EnvFilter};
 
 #[tokio::main]
 async fn main() -> errors::ResultSmall<()> {
+    // load .env file
+    dotenv::dotenv().map_err(|e| {
+        error!(error = e.to_string(), "Error loading .env");
+        e
+    })?;
+
     // load log config
     let env_filter = EnvFilter::from_default_env().add_directive("node=debug".parse().unwrap());
     let collector = tracing_subscriber::registry().with(env_filter).with(
@@ -37,12 +43,6 @@ async fn main() -> errors::ResultSmall<()> {
     tracing::subscriber::set_global_default(collector).unwrap();
 
     info!("Staring Node");
-
-    // load .env file
-    dotenv::dotenv().map_err(|e| {
-        error!(error = e.to_string(), "Error loading .env");
-        e
-    })?;
 
     // configure channels
     let (tx, mut rx) = broadcast::channel::<u8>(1);
@@ -86,7 +86,7 @@ async fn main() -> errors::ResultSmall<()> {
     debug!("Creating node context");
     let context = node::NodeContext {
         peers: peers.clone(),
-        shutdown: tx.clone(),
+        shutdown: tx,
         propagate_packet: txp,
         new_peers_tx,
         blockchain,
@@ -110,14 +110,16 @@ async fn main() -> errors::ResultSmall<()> {
     // waiting for tasks to finish
     debug!("Waiting for the ctr+c signal");
     signal::ctrl_c().await.unwrap();
-    tx.send(0).unwrap();
-    drop(tx);
+    info!("recieved ctrl+c command, procceding to stop the node");
+    context.shutdown.send(0).unwrap();
+    drop(context);
     loop {
         if let Err(broadcast::error::RecvError::Closed) = rx.recv().await {
             break;
         }
     }
 
+    info!("Dumping peers to file");
     match tools::dump_peers(peers).await {
         Ok(_) => {
             info!("Successfuly dumped peers to the file")
