@@ -2,26 +2,28 @@
 name = "node"
 version = "0.1.0"
 edition = "2021"
-
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-tokio = { version = "1.19.2", features = ["full"] }
-rmp-serde = "1.0.0"
-serde = { version = "1.0", features = ["derive"] }
-x25519-dalek = "1.2.0"
+blockchaintree = { git = "https://github.com/AploCoin/BlockChainTree", branch = "main" }
 chacha20 = "0.9.0"
-zstd = "0.9"
-thiserror = ">=1.0.32"
-rand_core = "0.5.0"
+dotenv = ">=0.15"
+error-stack = "0.3.1"
 getrandom = "0.2"
 lazy_static = ">=1.4"
 rand = ">=0.8.5"
+rand_core = "0.5.0"
+rmp-serde = "1.1.1"
+serde = { version = "1.0", features = ["derive"] }
 serde_json = ">=1" 
-dotenv = ">=0.15"
-blockchaintree = {git = "https://github.com/AploCoin/BlockChainTree", branch = "main"}
 sha2 = "0.10.6"
+thiserror = ">=1.0.32"
+tokio = { version = "1.19.2", features = ["full"] }
 tracing = "0.1.37"
 tracing-appender = "0.2.2"
 tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
-error-stack = "0.3.1"
+x25519-dalek = "1.2.0"
+zstd = "0.9"
+
+[profile.dev]
+overflow-checks = false

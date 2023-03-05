@@ -1,3 +1,4 @@
+#![allow(arithmetic_overflow)]
 use std::collections::HashSet;
 use std::net::SocketAddr;
 
@@ -24,23 +25,22 @@ lazy_static! {
     static ref PEER_TIMEOUT: Duration = Duration::from_secs(15);
 }
 
+#[derive(Clone)]
+pub struct NodeContext {
+    pub peers: Arc<Mutex<HashSet<SocketAddr>>>,
+    pub shutdown: Sender<u8>,
+    pub propagate_packet: Sender<packet_models::Packet>,
+    pub new_peers_tx: Sender<SocketAddr>,
+    pub blockchain: Arc<BlockChainTree>,
+}
+
 /// Start node, entry point
-pub async fn start(
-    peers_mut: Arc<Mutex<HashSet<SocketAddr>>>,
-    shutdown: Sender<u8>,
-    propagate: Sender<packet_models::Packet>,
-    new_peers_tx: Sender<SocketAddr>,
-    blockchain: Arc<BlockChainTree>,
-) -> Result<(), node_errors::NodeError> {
-    let mut rx = shutdown.subscribe();
+pub async fn start(context: NodeContext) -> Result<(), node_errors::NodeError> {
+    let mut rx = context.shutdown.subscribe();
 
     tokio::select! {
         _ = connect_to_peers(
-            peers_mut.clone(),
-            shutdown.clone(),
-            propagate.clone(),
-            new_peers_tx.clone(),
-            blockchain.clone()
+            context.clone()
         ) => {},
         _ = rx.recv() => {
             return Ok(());
@@ -57,21 +57,13 @@ pub async fn start(
                 res.map_err(|e| NodeError::AcceptConnectionError(e))?
             },
             _ = rx.recv() => {
-                shutdown.send(0).unwrap();
+                context.shutdown.send(0).unwrap();
                 break;
             }
         };
 
         println!("New connection from: {}", addr);
-        tokio::spawn(handle_incoming(
-            sock,
-            addr,
-            shutdown.clone(),
-            propagate.clone(),
-            peers_mut.clone(),
-            new_peers_tx.clone(),
-            blockchain.clone(),
-        ));
+        tokio::spawn(handle_incoming(sock, addr, context.clone()));
     }
 
     Ok(())
@@ -81,21 +73,17 @@ pub async fn start(
 async fn handle_incoming(
     socket: TcpStream,
     addr: SocketAddr,
-    shutdown: Sender<u8>,
-    propagate: Sender<packet_models::Packet>,
-    peers: Arc<Mutex<HashSet<SocketAddr>>>,
-    new_peers_tx: Sender<SocketAddr>,
-    blockchain: Arc<BlockChainTree>,
+    context: NodeContext,
 ) -> Result<(), node_errors::NodeError> {
-    let mut rx = shutdown.subscribe();
+    let mut rx = context.shutdown.subscribe();
     tokio::select! {
         res = handle_incoming_wrapped(
             socket,
             addr,
-            propagate,
-            peers,
-            new_peers_tx,
-            blockchain) => res,
+            context.propagate_packet,
+            context.peers,
+            context.new_peers_tx,
+            context.blockchain) => res,
         _ = rx.recv() => {
             Ok(())
         }
@@ -151,49 +139,29 @@ async fn handle_incoming_wrapped(
     Ok(())
 }
 
-async fn connect_to_peers(
-    peers_mut: Arc<Mutex<HashSet<SocketAddr>>>,
-    shutdown: Sender<u8>,
-    propagate: Sender<packet_models::Packet>,
-    new_peers_tx: Sender<SocketAddr>,
-    blockchain: Arc<BlockChainTree>,
-) {
-    let peers = peers_mut.lock().await;
+async fn connect_to_peers(context: NodeContext) {
+    let peers = context.peers.lock().await;
 
     for peer in peers.iter() {
-        tokio::spawn(connect_to_peer(
-            *peer,
-            peers_mut.clone(),
-            shutdown.clone(),
-            propagate.clone(),
-            new_peers_tx.clone(),
-            blockchain.clone(),
-        ));
+        tokio::spawn(connect_to_peer(*peer, context.clone()));
     }
 }
 
-pub async fn connect_to_peer(
-    addr: SocketAddr,
-    peers_mut: Arc<Mutex<HashSet<SocketAddr>>>,
-    shutdown: Sender<u8>,
-    propagate: Sender<packet_models::Packet>,
-    new_peers_tx: Sender<SocketAddr>,
-    blockchain: Arc<BlockChainTree>,
-) {
-    let mut rx = shutdown.subscribe();
+pub async fn connect_to_peer(addr: SocketAddr, context: NodeContext) {
+    let mut rx = context.shutdown.subscribe();
     tokio::select! {
         _ = rx.recv() => {},
         _ = handle_peer(
             &addr,
-            peers_mut.clone(),
-            propagate,
-            new_peers_tx,
-            blockchain
+            context.peers.clone(),
+            context.propagate_packet,
+            context.new_peers_tx,
+            context.blockchain
         ) => {}
     };
 
     // remove peer from active peers
-    let mut peers = peers_mut.lock().await;
+    let mut peers = context.peers.lock().await;
     peers.remove(&addr);
 }
 
@@ -503,37 +471,20 @@ async fn process_packet(
     Ok(())
 }
 
-pub async fn connect_new_peers(
-    shutdown: Sender<u8>,
-    peers_mut: Arc<Mutex<HashSet<SocketAddr>>>,
-    propagate: Sender<packet_models::Packet>,
-    new_peers_tx: Sender<SocketAddr>,
-    blockchain: Arc<BlockChainTree>,
-) {
-    let mut shutdown_watcher = shutdown.subscribe();
-    let mut new_peers_rx = new_peers_tx.subscribe();
+pub async fn connect_new_peers(context: NodeContext) {
+    let mut shutdown_watcher = context.shutdown.subscribe();
+    let mut new_peers_rx = context.new_peers_tx.subscribe();
 
     tokio::select! {
         _ = shutdown_watcher.recv() => {},
         _ = connect_new_peers_wrapped(
-            peers_mut,
-            propagate,
-            shutdown.clone(),
             &mut new_peers_rx,
-            new_peers_tx,
-            blockchain
+            context
         ) => {}
     }
 }
 
-async fn connect_new_peers_wrapped(
-    peers_mut: Arc<Mutex<HashSet<SocketAddr>>>,
-    propagate: Sender<packet_models::Packet>,
-    shutdown: Sender<u8>,
-    new_peers_rx: &mut Receiver<SocketAddr>,
-    new_peers_tx: Sender<SocketAddr>,
-    blockchain: Arc<BlockChainTree>,
-) {
+async fn connect_new_peers_wrapped(new_peers_rx: &mut Receiver<SocketAddr>, context: NodeContext) {
     loop {
         let peer_addr = match new_peers_rx.recv().await {
             Ok(p) => p,
@@ -550,13 +501,6 @@ async fn connect_new_peers_wrapped(
         // }
         // drop(peers);
 
-        tokio::spawn(connect_to_peer(
-            peer_addr,
-            peers_mut.clone(),
-            shutdown.clone(),
-            propagate.clone(),
-            new_peers_tx.clone(),
-            blockchain.clone(),
-        ));
+        tokio::spawn(connect_to_peer(peer_addr, context.clone()));
     }
 }

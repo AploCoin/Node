@@ -83,25 +83,22 @@ async fn main() -> errors::ResultSmall<()> {
     });
     debug!("Blockchain loaded");
 
+    debug!("Creating node context");
+    let context = node::NodeContext {
+        peers: peers.clone(),
+        shutdown: tx.clone(),
+        propagate_packet: txp,
+        new_peers_tx,
+        blockchain,
+    };
+
     // starting main tasks
     debug!("Starting node task");
-    let fut = node::start(
-        peers.clone(),
-        tx.clone(),
-        txp.clone(),
-        new_peers_tx.clone(),
-        blockchain.clone(),
-    );
+    let fut = node::start(context.clone());
     tokio::spawn(fut);
 
     debug!("Starting connecting new peers task");
-    let fut = node::connect_new_peers(
-        tx.clone(),
-        peers.clone(),
-        txp.clone(),
-        new_peers_tx,
-        blockchain,
-    );
+    let fut = node::connect_new_peers(context.clone());
     tokio::spawn(fut);
 
     info!("Node started");

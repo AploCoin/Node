@@ -214,3 +214,19 @@ impl EncSocket {
         self.send_raw(&buf).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::EncSocket;
+
+    #[test]
+    fn nonce_generation() {
+        let data = [0u8; 32];
+        let result = EncSocket::generate_nonce(&data);
+        println!("{:X?}", result);
+        assert_eq!(
+            result,
+            [132, 49, 97, 234, 13, 88, 250, 33, 218, 113, 244, 62]
+        );
+    }
+}

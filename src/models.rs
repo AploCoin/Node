@@ -129,11 +129,11 @@ pub mod packet_models {
         pub dump: Option<Vec<u8>>,
     }
 
-    // #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
-    // pub struct GetBlocksResponse {
-    //     pub id: u64,
-    //     pub dump: Option<Vec<u8>>,
-    // }
+    #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+    pub struct GetBlocksResponse {
+        pub id: u64,
+        pub blocks: Vec<Vec<u8>>,
+    }
 
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
     pub struct GetTransactionResponse {
@@ -328,6 +328,17 @@ pub fn parse_ipv6(data: &[u8]) -> Result<Vec<SocketAddr>, AddressError> {
 #[cfg(test)]
 mod dump_parse_tests {
     use super::*;
+
+    #[test]
+    fn create_ping_packet() {
+        let mut buf: Vec<u8> = Vec::new();
+        let mut serializer = rmp_serde::Serializer::new(&mut buf);
+        packet_models::Request::Ping(packet_models::PingRequest { id: 228 })
+            .serialize(&mut serializer)
+            .unwrap();
+
+        println!("{:X?}", buf);
+    }
 
     #[test]
     fn dump_addresses_test() {
