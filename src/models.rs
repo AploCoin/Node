@@ -22,7 +22,6 @@ pub mod packet_models {
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
-    #[serde(tag = "type")]
     pub enum Packet {
         Request(Request),
         Response(Response),
@@ -340,9 +339,24 @@ mod dump_parse_tests {
     fn create_ping_packet() {
         let mut buf: Vec<u8> = Vec::new();
         let mut serializer = rmp_serde::Serializer::new(&mut buf);
-        packet_models::Request::Ping(packet_models::PingRequest { id: 228 })
-            .serialize(&mut serializer)
-            .unwrap();
+        packet_models::Packet::Request(packet_models::Request::Ping(packet_models::PingRequest {
+            id: 228,
+        }))
+        .serialize(&mut serializer)
+        .unwrap();
+
+        println!("{:X?}", buf);
+    }
+
+    #[test]
+    fn create_ping_response() {
+        let mut buf: Vec<u8> = Vec::new();
+        let mut serializer = rmp_serde::Serializer::new(&mut buf);
+        packet_models::Packet::Response(packet_models::Response::Ping(
+            packet_models::PingResponse { id: 228 },
+        ))
+        .serialize(&mut serializer)
+        .unwrap();
 
         println!("{:X?}", buf);
     }
