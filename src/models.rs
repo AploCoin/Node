@@ -81,7 +81,7 @@ pub mod packet_models {
     pub struct GetBlocksByHeightsRequest {
         pub id: u64,
         pub start: u64,
-        pub end: u64,
+        pub amount: u64,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -104,6 +104,7 @@ pub mod packet_models {
         GetTransaction(GetTransactionResponse),
         Ping(PingResponse),
         GetBlock(GetBlockResponse),
+        GetBlocks(GetBlocksResponse),
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -354,6 +355,22 @@ mod dump_parse_tests {
         let mut serializer = rmp_serde::Serializer::new(&mut buf);
         packet_models::Packet::Response(packet_models::Response::Ping(
             packet_models::PingResponse { id: 228 },
+        ))
+        .serialize(&mut serializer)
+        .unwrap();
+
+        println!("{:X?}", buf);
+    }
+
+    #[test]
+    fn create_getblocks_response() {
+        let mut buf: Vec<u8> = Vec::new();
+        let mut serializer = rmp_serde::Serializer::new(&mut buf);
+        packet_models::Packet::Response(packet_models::Response::GetBlocks(
+            packet_models::GetBlocksResponse {
+                id: 228,
+                blocks: vec![vec![1, 2], vec![1, 2]],
+            },
         ))
         .serialize(&mut serializer)
         .unwrap();

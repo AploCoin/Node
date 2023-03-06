@@ -2,6 +2,7 @@
 use std::collections::HashSet;
 use std::net::SocketAddr;
 
+use crate::config;
 use crate::errors::node_errors::NodeError;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::broadcast::Sender;
@@ -84,11 +85,17 @@ async fn handle_incoming(
             context.propagate_packet,
             context.peers,
             context.new_peers_tx,
-            context.blockchain) => res,
+            context.blockchain) => {
+                match res {
+                Err(e) => error!("Unexpected error on peer {}: {:?}", addr, e),
+                Ok(_) => {}
+            }},
         _ = rx.recv() => {
-            Ok(())
+
         }
     }
+
+    Ok(())
 }
 
 /// Wrapped main body of incoming connection handler
@@ -155,13 +162,18 @@ pub async fn connect_to_peer(addr: SocketAddr, context: NodeContext) {
     let mut rx = context.shutdown.subscribe();
     tokio::select! {
         _ = rx.recv() => {},
-        _ = handle_peer(
+        ret = handle_peer(
             &addr,
             context.peers.clone(),
             context.propagate_packet,
             context.new_peers_tx,
             context.blockchain
-        ) => {}
+        ) => {
+            match ret {
+                Err(e) => error!("Unexpected error on peer {}: {:?}", addr, e),
+                Ok(_) => {}
+            }
+        }
     };
 
     // remove peer from active peers
@@ -430,7 +442,40 @@ async fn process_packet(
                     .await
                     .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
             }
-            packet_models::Request::GetBlocksByHeights(p) => {}
+            packet_models::Request::GetBlocksByHeights(p) => {
+                // if p.amount as usize > config::MAX_BLOCKS_IN_RESPONSE {
+                //     return Err(NodeError::TooMuchBlocksError(
+                //         config::MAX_BLOCKS_IN_RESPONSE,
+                //     ));
+                // } else if p.amount == 0 {
+                //     socket
+                //         .send(packet_models::Packet::Response(
+                //             packet_models::Response::GetBlocks(packet_models::GetBlocksResponse {
+                //                 id: p.id,
+                //                 blocks: Vec::new(),
+                //             }),
+                //         ))
+                //         .await
+                //         .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
+                //     return Ok(());
+                // }
+
+                // let chain = blockchain.get_main_chain();
+                // let height = chain.get_height().await;
+                // if height <= p.start {
+                //     return Err(NodeError::NotReachedHeightError(p.start as usize));
+                // }
+
+                // let amount = if p.start+p.amount > height{
+                //     height - p.start
+                // }else{
+                //     p.amount
+                // };
+
+                // for height in p.start..p.start+amount{
+
+                // }
+            }
             packet_models::Request::NewTransaction(p) => {
                 if p.transaction.len() < 4 {
                     return Err(NodeError::BadTransactionSizeError);

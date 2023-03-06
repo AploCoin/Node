@@ -99,6 +99,15 @@ pub mod node_errors {
 
         #[error("Error searching for transaction: {0:?}")]
         FindTransactionError(String),
+
+        #[error("Too much blocks requested, max: {0}")]
+        TooMuchBlocksError(usize),
+
+        #[error("Chain hasn't yet reached that height")]
+        NotReachedHeightError(usize),
+
+        #[error("Peer error")]
+        PeerError,
     }
 
     #[derive(Debug, Clone, Error)]
