@@ -363,6 +363,38 @@ mod dump_parse_tests {
     }
 
     #[test]
+    fn create_get_balance_request() {
+        let mut buf: Vec<u8> = Vec::new();
+        let mut serializer = rmp_serde::Serializer::new(&mut buf);
+        packet_models::Packet::Request(packet_models::Request::GetAmount(
+            packet_models::GetAmountRequest {
+                id: 228,
+                address: vec![1u8; 33],
+            },
+        ))
+        .serialize(&mut serializer)
+        .unwrap();
+
+        println!("{:X?}", buf);
+    }
+
+    #[test]
+    fn create_get_balance_response() {
+        let mut buf: Vec<u8> = Vec::new();
+        let mut serializer = rmp_serde::Serializer::new(&mut buf);
+        packet_models::Packet::Response(packet_models::Response::GetAmount(
+            packet_models::GetAmountResponse {
+                id: 228,
+                amount: vec![1u8; 33],
+            },
+        ))
+        .serialize(&mut serializer)
+        .unwrap();
+
+        println!("{:X?}", buf);
+    }
+
+    #[test]
     fn create_getblocks_response() {
         let mut buf: Vec<u8> = Vec::new();
         let mut serializer = rmp_serde::Serializer::new(&mut buf);

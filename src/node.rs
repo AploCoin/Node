@@ -87,8 +87,8 @@ async fn handle_incoming(
             context.new_peers_tx,
             context.blockchain) => {
                 match res {
-                Err(e) => error!("Unexpected error on peer {}: {:?}", addr, e),
-                Ok(_) => {}
+                    Err(e) => error!("Unexpected error on peer {}: {:?}", addr, e),
+                    Ok(_) => {}
             }},
         _ = rx.recv() => {
 
@@ -128,7 +128,7 @@ async fn handle_incoming_wrapped(
         };
 
         // handle packet
-        if process_packet(
+        if let Err(e) = process_packet(
             &mut socket,
             &packet,
             &mut waiting_response,
@@ -138,8 +138,11 @@ async fn handle_incoming_wrapped(
             &blockchain,
         )
         .await
-        .is_err()
         {
+            debug!(
+                "Error processing packet for the peer {}: {:?}",
+                addr, packet
+            );
             break;
         }
     }
@@ -223,7 +226,7 @@ pub async fn handle_peer(
         };
 
         // handle packet
-        if process_packet(
+        if let Err(e) = process_packet(
             &mut socket,
             &packet,
             &mut waiting_response,
@@ -233,8 +236,11 @@ pub async fn handle_peer(
             &blockchain,
         )
         .await
-        .is_err()
         {
+            debug!(
+                "Error processing packet for the peer {}: {:?}",
+                addr, packet
+            );
             break;
         }
     }
@@ -331,11 +337,11 @@ async fn process_packet(
                 };
 
                 socket
-                    .send(packet_models::Response::GetAmount(
-                        packet_models::GetAmountResponse {
+                    .send(packet_models::Packet::Response(
+                        packet_models::Response::GetAmount(packet_models::GetAmountResponse {
                             id: p.id,
                             amount: funds_dumped,
-                        },
+                        }),
                     ))
                     .await
                     .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
@@ -443,38 +449,62 @@ async fn process_packet(
                     .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
             }
             packet_models::Request::GetBlocksByHeights(p) => {
-                // if p.amount as usize > config::MAX_BLOCKS_IN_RESPONSE {
-                //     return Err(NodeError::TooMuchBlocksError(
-                //         config::MAX_BLOCKS_IN_RESPONSE,
-                //     ));
-                // } else if p.amount == 0 {
-                //     socket
-                //         .send(packet_models::Packet::Response(
-                //             packet_models::Response::GetBlocks(packet_models::GetBlocksResponse {
-                //                 id: p.id,
-                //                 blocks: Vec::new(),
-                //             }),
-                //         ))
-                //         .await
-                //         .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
-                //     return Ok(());
-                // }
+                if p.amount as usize > config::MAX_BLOCKS_IN_RESPONSE {
+                    return Err(NodeError::TooMuchBlocksError(
+                        config::MAX_BLOCKS_IN_RESPONSE,
+                    ));
+                } else if p.amount == 0 {
+                    socket
+                        .send(packet_models::Packet::Response(
+                            packet_models::Response::GetBlocks(packet_models::GetBlocksResponse {
+                                id: p.id,
+                                blocks: Vec::new(),
+                            }),
+                        ))
+                        .await
+                        .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
+                    return Ok(());
+                }
 
-                // let chain = blockchain.get_main_chain();
-                // let height = chain.get_height().await;
-                // if height <= p.start {
-                //     return Err(NodeError::NotReachedHeightError(p.start as usize));
-                // }
+                let chain = blockchain.get_main_chain();
+                let height = chain.get_height().await;
+                if height <= p.start {
+                    return Err(NodeError::NotReachedHeightError(p.start as usize));
+                }
 
-                // let amount = if p.start+p.amount > height{
-                //     height - p.start
-                // }else{
-                //     p.amount
-                // };
+                let amount = if p.start + p.amount > height {
+                    height - p.start
+                } else {
+                    p.amount
+                };
 
-                // for height in p.start..p.start+amount{
+                let mut blocks: Vec<Vec<u8>> = Vec::with_capacity(amount as usize);
 
-                // }
+                for height in p.start..p.start + amount {
+                    if let Some(block) = chain
+                        .find_by_height(height)
+                        .await
+                        .map_err(|e| NodeError::GetBlockError(e.to_string()))?
+                    {
+                        blocks.push(
+                            block
+                                .dump()
+                                .map_err(|e| NodeError::GetBlockError(e.to_string()))?,
+                        );
+                    } else {
+                        break;
+                    }
+                }
+
+                socket
+                    .send(packet_models::Packet::Response(
+                        packet_models::Response::GetBlocks(packet_models::GetBlocksResponse {
+                            id: p.id,
+                            blocks,
+                        }),
+                    ))
+                    .await
+                    .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
             }
             packet_models::Request::NewTransaction(p) => {
                 if p.transaction.len() < 4 {
