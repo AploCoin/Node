@@ -140,8 +140,8 @@ async fn handle_incoming_wrapped(
         .await
         {
             debug!(
-                "Error processing packet for the peer {}: {:?}",
-                addr, packet
+                "Error processing packet for the peer {}: {:?} ERROR: {:?}",
+                addr, packet, e
             );
             break;
         }
@@ -398,7 +398,7 @@ async fn process_packet(
                     .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
             }
             packet_models::Request::GetBlockByHash(p) => {
-                let block_dump = match blockchain.get_main_chain().find_by_hash(&p.hash).await {
+                let block_dump = match blockchain.get_main_chain().find_raw_by_hash(&p.hash).await {
                     Err(e) => {
                         // socket
                         //     .send(packet_models::ErrorR {
@@ -408,11 +408,7 @@ async fn process_packet(
                         //     .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
                         return Err(NodeError::GetBlockError(e.to_string()));
                     }
-                    Ok(Some(block)) => Some(
-                        block
-                            .dump()
-                            .map_err(|e| NodeError::GetBlockError(e.to_string()))?,
-                    ),
+                    Ok(Some(block)) => Some(block),
                     Ok(None) => None,
                 };
 
@@ -427,15 +423,15 @@ async fn process_packet(
                     .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
             }
             packet_models::Request::GetBlockByHeight(p) => {
-                let block_dump = match blockchain.get_main_chain().find_by_height(p.height).await {
+                let block_dump = match blockchain
+                    .get_main_chain()
+                    .find_raw_by_height(p.height)
+                    .await
+                {
                     Err(e) => {
                         return Err(NodeError::GetBlockError(e.to_string()));
                     }
-                    Ok(Some(block)) => Some(
-                        block
-                            .dump()
-                            .map_err(|e| NodeError::GetBlockError(e.to_string()))?,
-                    ),
+                    Ok(Some(block)) => Some(block),
                     Ok(None) => None,
                 };
                 socket
@@ -482,15 +478,11 @@ async fn process_packet(
 
                 for height in p.start..p.start + amount {
                     if let Some(block) = chain
-                        .find_by_height(height)
+                        .find_raw_by_height(height)
                         .await
                         .map_err(|e| NodeError::GetBlockError(e.to_string()))?
                     {
-                        blocks.push(
-                            block
-                                .dump()
-                                .map_err(|e| NodeError::GetBlockError(e.to_string()))?,
-                        );
+                        blocks.push(block);
                     } else {
                         break;
                     }
