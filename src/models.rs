@@ -40,6 +40,15 @@ pub mod packet_models {
         GetBlockByHeight(GetBlockByHeightRequest),
         GetBlocksByHeights(GetBlocksByHeightsRequest),
         NewTransaction(NewTransactionRequest),
+        SubmitPow(SubmitPow),
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+    pub struct SubmitPow {
+        pub id: u64,
+        pub pow: Vec<u8>,
+        pub address: Vec<u8>,
+        pub timestamp: u64,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]

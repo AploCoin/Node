@@ -13,7 +13,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::signal;
 use tokio::sync::broadcast;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info};
 use tracing_subscriber::{fmt, layer::SubscriberExt, EnvFilter};
@@ -46,10 +46,11 @@ async fn main() -> errors::ResultSmall<()> {
 
     // configure channels
     let (tx, mut rx) = broadcast::channel::<u8>(1);
-    let (txp, _) = broadcast::channel::<models::packet_models::Packet>(100);
+    let (txp, _) = broadcast::channel::<(u64, models::packet_models::Packet)>(100);
     let (new_peers_tx, _) = broadcast::channel::<SocketAddr>(100);
 
-    let peers: Arc<Mutex<HashSet<SocketAddr>>> = Arc::new(Mutex::new(HashSet::with_capacity(100)));
+    let peers: Arc<RwLock<HashSet<SocketAddr>>> =
+        Arc::new(RwLock::new(HashSet::with_capacity(100)));
 
     debug!("Loading peers");
     match tools::load_peers(peers.clone()).await {
@@ -66,7 +67,8 @@ async fn main() -> errors::ResultSmall<()> {
 
     // loading blockchain
     info!("Loading blockchain");
-    let blockchain = Arc::new(match BlockChainTree::with_config() {
+    // TODO: remove RwLock & rewrite blockchain to work without &mut self
+    let blockchain = Arc::new(RwLock::new(match BlockChainTree::with_config() {
         Err(e) => {
             error!("Failed to load blockchain with config {:?}", e.to_string());
             info!("Trying to load blockchain without config");
@@ -80,7 +82,7 @@ async fn main() -> errors::ResultSmall<()> {
                 .unwrap()
         }
         Ok(tree) => tree,
-    });
+    }));
     debug!("Blockchain loaded");
 
     debug!("Creating node context");

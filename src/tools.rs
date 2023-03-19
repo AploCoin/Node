@@ -9,7 +9,7 @@ use std::io::Cursor;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 
 #[macro_export]
 macro_rules! box_array {
@@ -37,7 +37,7 @@ pub fn current_time() -> u64 {
 
 const PEERS_BACKUP_FILE: &str = "peers.dump";
 
-pub async fn load_peers(peers_mut: Arc<Mutex<HashSet<SocketAddr>>>) -> ResultSmall<()> {
+pub async fn load_peers(peers_mut: Arc<RwLock<HashSet<SocketAddr>>>) -> ResultSmall<()> {
     let file = File::open(PEERS_BACKUP_FILE)?;
 
     let mut decoder = zstd::Decoder::new(file)?;
@@ -48,7 +48,7 @@ pub async fn load_peers(peers_mut: Arc<Mutex<HashSet<SocketAddr>>>) -> ResultSma
 
     let peers = peers_dump::Peers::deserialize(&mut Deserializer::new(Cursor::new(decoded_data)))?;
 
-    let mut peers_storage = peers_mut.lock().await;
+    let mut peers_storage = peers_mut.write().await;
     if let Some(dump) = peers.ipv4 {
         let parsed = parse_ipv4(&dump)?;
         for addr in parsed {
@@ -66,12 +66,12 @@ pub async fn load_peers(peers_mut: Arc<Mutex<HashSet<SocketAddr>>>) -> ResultSma
     Ok(())
 }
 
-pub async fn dump_peers(peers_mut: Arc<Mutex<HashSet<SocketAddr>>>) -> ResultSmall<()> {
+pub async fn dump_peers(peers_mut: Arc<RwLock<HashSet<SocketAddr>>>) -> ResultSmall<()> {
     let target = File::create(PEERS_BACKUP_FILE)?;
 
     let mut encoder = zstd::Encoder::new(target, 21)?;
 
-    let peers_storage = peers_mut.lock().await;
+    let peers_storage = peers_mut.read().await;
 
     let mut peers: Vec<SocketAddr> = Vec::with_capacity(peers_storage.len());
 
