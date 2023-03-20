@@ -67,8 +67,7 @@ async fn main() -> errors::ResultSmall<()> {
 
     // loading blockchain
     info!("Loading blockchain");
-    // TODO: remove RwLock & rewrite blockchain to work without &mut self
-    let blockchain = Arc::new(RwLock::new(match BlockChainTree::with_config() {
+    let blockchain = Arc::new(match BlockChainTree::with_config() {
         Err(e) => {
             error!("Failed to load blockchain with config {:?}", e.to_string());
             info!("Trying to load blockchain without config");
@@ -82,7 +81,7 @@ async fn main() -> errors::ResultSmall<()> {
                 .unwrap()
         }
         Ok(tree) => tree,
-    }));
+    });
     debug!("Blockchain loaded");
 
     debug!("Creating node context");

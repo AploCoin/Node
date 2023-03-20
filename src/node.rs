@@ -35,7 +35,7 @@ pub struct NodeContext {
     pub shutdown: Sender<u8>,
     pub propagate_packet: Sender<(u64, packet_models::Packet)>,
     pub new_peers_tx: Sender<SocketAddr>,
-    pub blockchain: Arc<RwLock<BlockChainTree>>,
+    pub blockchain: Arc<BlockChainTree>,
 }
 
 /// Start node, entry point
@@ -108,7 +108,7 @@ async fn handle_incoming_wrapped(
     mut propagate: Sender<(u64, packet_models::Packet)>,
     peers: Arc<RwLock<HashSet<SocketAddr>>>,
     mut new_peers_tx: Sender<SocketAddr>,
-    blockchain: Arc<RwLock<BlockChainTree>>,
+    blockchain: Arc<BlockChainTree>,
 ) -> Result<(), NodeError> {
     let mut rx_propagate = propagate.subscribe();
 
@@ -193,7 +193,7 @@ pub async fn handle_peer(
     peers_mut: Arc<RwLock<HashSet<SocketAddr>>>,
     mut propagate: Sender<(u64, packet_models::Packet)>,
     mut new_peers_tx: Sender<SocketAddr>,
-    blockchain: Arc<RwLock<BlockChainTree>>,
+    blockchain: Arc<BlockChainTree>,
 ) -> Result<(), NodeError> {
     // set up
     let mut rx_propagate = propagate.subscribe();
@@ -261,7 +261,7 @@ async fn process_packet(
     peers_mut: Arc<RwLock<HashSet<SocketAddr>>>,
     propagate: &mut Sender<(u64, packet_models::Packet)>,
     new_peers_tx: &mut Sender<SocketAddr>,
-    blockchain: &Arc<RwLock<BlockChainTree>>,
+    blockchain: &Arc<BlockChainTree>,
     recieved_timestamp: u64,
 ) -> Result<(), NodeError> {
     match packet {
@@ -314,8 +314,6 @@ async fn process_packet(
                 }
             }
             packet_models::Request::GetAmount(p) => {
-                let blockchain = blockchain.read().await;
-
                 if p.address.len() != 33 {
                     socket
                         .send(packet_models::Packet::Error(packet_models::ErrorR {
@@ -395,7 +393,6 @@ async fn process_packet(
                     .map_err(|e| NodeError::SendPacketError(socket.addr, e))?
             }
             packet_models::Request::GetTransaction(p) => {
-                let blockchain = blockchain.read().await;
                 let packet = packet_models::Response::GetTransaction(
                     packet_models::GetTransactionResponse {
                         id: p.id,
@@ -418,7 +415,6 @@ async fn process_packet(
                     .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
             }
             packet_models::Request::GetBlockByHash(p) => {
-                let blockchain = blockchain.read().await;
                 let block_dump = match blockchain.get_main_chain().find_raw_by_hash(&p.hash).await {
                     Err(e) => {
                         // socket
@@ -444,7 +440,6 @@ async fn process_packet(
                     .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
             }
             packet_models::Request::GetBlockByHeight(p) => {
-                let blockchain = blockchain.read().await;
                 let block_dump = match blockchain
                     .get_main_chain()
                     .find_raw_by_height(p.height)
@@ -484,8 +479,6 @@ async fn process_packet(
                     return Ok(());
                 }
 
-                let blockchain = blockchain.read().await;
-
                 let chain = blockchain.get_main_chain();
                 let height = chain.get_height().await;
                 if height <= p.start {
@@ -523,7 +516,6 @@ async fn process_packet(
                     .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
             }
             packet_models::Request::NewTransaction(p) => {
-                let blockchain = blockchain.read().await;
                 if p.transaction.len() < 4 {
                     return Err(NodeError::BadTransactionSizeError);
                 }
