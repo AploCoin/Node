@@ -327,7 +327,7 @@ async fn process_packet(
                 let address: [u8; 33] =
                     unsafe { p.to_owned().address.try_into().unwrap_unchecked() };
 
-                let funds = match blockchain.get_funds(&address) {
+                let funds = match blockchain.get_funds(&address).await {
                     Err(e) => {
                         socket
                             .send(packet_models::Packet::Error(packet_models::ErrorR {
