@@ -39,17 +39,6 @@ pub mod node_errors {
         }
     }
 
-    // #[derive(Debug, Clone, Error)]
-    // #[error("Node error: {:?}", self.e)]
-    // pub struct NodeError {
-    //     pub e: String,
-    // }
-    // impl NodeError {
-    //     pub fn new(e: String) -> NodeError {
-    //         NodeError { e }
-    //     }
-    // }
-
     #[derive(Debug, Error)]
     pub enum NodeError {
         #[error("Error connecting to peer {0:?}: {1:?}")]
@@ -106,8 +95,16 @@ pub mod node_errors {
         #[error("Chain hasn't yet reached that height")]
         NotReachedHeightError(usize),
 
-        #[error("Peer error")]
-        PeerError,
+        #[error("The submitted timestamp is bigger, than the actual time {0:?} > {1:?}")]
+        TimestampInFutureError(u64, u64),
+
+        #[error("Tried to send funds from the root address")]
+        SendFundsFromRoot,
+
+        #[error("Provided address is {0} but should be 33 bytes")]
+        WrongAddressSize(usize),
+        // #[error("Peer error")]
+        // PeerError,
     }
 
     #[derive(Debug, Clone, Error)]

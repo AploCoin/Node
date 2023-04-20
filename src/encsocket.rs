@@ -16,20 +16,28 @@ use tokio::time::Duration;
 use x25519_dalek::{EphemeralSecret, PublicKey};
 
 static MAX_PACKET_SIZE: usize = 5242880; // size in bytes
+static BUFFER_RECV_SIZE: usize = 262144;
 
 pub struct EncSocket {
     socket: TcpStream,
     cipher: ChaCha20,
     pub addr: SocketAddr,
+    timeout: Duration,
 }
 
 impl EncSocket {
     #[allow(dead_code)]
-    pub fn new(socket: TcpStream, cipher: ChaCha20, addr: SocketAddr) -> EncSocket {
+    pub fn new(
+        socket: TcpStream,
+        cipher: ChaCha20,
+        addr: SocketAddr,
+        timeout: Duration,
+    ) -> EncSocket {
         EncSocket {
             socket,
             cipher,
             addr,
+            timeout,
         }
     }
 
@@ -61,6 +69,7 @@ impl EncSocket {
     pub async fn new_connection(
         mut socket: TcpStream,
         addr: SocketAddr,
+        timeout: Duration,
     ) -> Result<EncSocket, EncSocketError> {
         let mut buf = [0; 32];
         let secret = EphemeralSecret::new(OsRng);
@@ -71,9 +80,9 @@ impl EncSocket {
             .await
             .map_err(|e| EncSocketError::WriteSocketError(e))?;
 
-        socket
-            .read_exact(&mut buf)
+        tokio::time::timeout(timeout, socket.read_exact(&mut buf))
             .await
+            .map_err(|_| EncSocketError::TimeoutError)?
             .map_err(|e| EncSocketError::ReadSocketError(e))?;
 
         let other_public = PublicKey::from(buf);
@@ -86,20 +95,22 @@ impl EncSocket {
             socket,
             cipher,
             addr,
+            timeout,
         })
     }
 
     pub async fn establish_new_connection(
         mut socket: TcpStream,
         addr: SocketAddr,
+        timeout: Duration,
     ) -> Result<EncSocket, EncSocketError> {
         let mut buf = [0; 32];
         let secret = EphemeralSecret::new(OsRng);
         let public = PublicKey::from(&secret);
 
-        socket
-            .read_exact(&mut buf)
+        tokio::time::timeout(timeout, socket.read_exact(&mut buf))
             .await
+            .map_err(|_| EncSocketError::TimeoutError)?
             .map_err(|e| EncSocketError::ReadSocketError(e))?;
 
         socket
@@ -117,6 +128,7 @@ impl EncSocket {
             socket,
             cipher,
             addr,
+            timeout,
         })
     }
 
@@ -132,16 +144,43 @@ impl EncSocket {
                 reason: e,
             })?;
 
-        EncSocket::establish_new_connection(stream, addr).await
+        EncSocket::establish_new_connection(stream, addr, timeout).await
+    }
+
+    pub async fn read_exact(&mut self, buffer: &mut [u8]) -> Result<(), EncSocketError> {
+        let mut received_size = 0;
+        while received_size < buffer.len() {
+            let left = buffer.len() - received_size;
+            if left < BUFFER_RECV_SIZE {
+                tokio::time::timeout(
+                    self.timeout,
+                    self.socket.read_exact(&mut buffer[received_size..]),
+                )
+                .await
+                .map_err(|_| EncSocketError::TimeoutError)?
+                .map_err(|e| EncSocketError::ReadSocketError(e))?;
+                break;
+            }
+            tokio::time::timeout(
+                self.timeout,
+                self.socket
+                    .read_exact(&mut buffer[received_size..received_size + BUFFER_RECV_SIZE]),
+            )
+            .await
+            .map_err(|_| EncSocketError::TimeoutError)?
+            .map_err(|e| EncSocketError::ReadSocketError(e))?;
+
+            received_size += BUFFER_RECV_SIZE;
+        }
+        Ok(())
     }
 
     pub async fn recv_raw(&mut self) -> Result<(usize, Vec<u8>), EncSocketError> {
         // read size of the packet
         let mut recv_buffer = [0u8; 4];
-        self.socket
-            .read_exact(&mut recv_buffer)
-            .await
-            .map_err(|e| EncSocketError::ReadSocketError(e))?;
+
+        self.read_exact(&mut recv_buffer).await?;
+
         let packet_size = u32::from_be_bytes(recv_buffer) as usize;
 
         if packet_size > MAX_PACKET_SIZE {
@@ -150,10 +189,7 @@ impl EncSocket {
 
         // read actual packet
         let mut recv_buffer = vec![0u8; packet_size];
-        self.socket
-            .read_exact(&mut recv_buffer)
-            .await
-            .map_err(|e| EncSocketError::ReadSocketError(e))?;
+        self.read_exact(&mut recv_buffer).await?;
 
         // decrypt packet
         self.cipher.apply_keystream(&mut recv_buffer);

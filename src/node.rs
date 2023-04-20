@@ -1,32 +1,89 @@
 #![allow(arithmetic_overflow)]
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 
 use crate::config;
-use crate::errors::node_errors::NodeError;
-use tokio::sync::{
-    broadcast::{Receiver, Sender},
-    RwLock,
-};
-
 use crate::config::*;
 use crate::encsocket::EncSocket;
+use crate::errors::node_errors::NodeError;
 use crate::errors::*;
 use crate::models;
 use crate::models::*;
 use crate::tools;
+use blockchaintree::block::MainChainBlockBox;
 use blockchaintree::blockchaintree::BlockChainTree;
+use blockchaintree::errors::BlockError;
 use blockchaintree::transaction::Transactionable;
+use error_stack::Report;
 use lazy_static::lazy_static;
+use num_bigint::BigUint;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::Mutex;
+use tokio::sync::{
+    broadcast::{Receiver, Sender},
+    RwLock,
+};
 use tokio::time::Duration;
 #[allow(unused_imports)]
 use tracing::{debug, error, info};
 
 lazy_static! {
     static ref PEER_TIMEOUT: Duration = Duration::from_secs(15);
+}
+
+/// Holds new data passed to the node until several verifications
+#[derive(Clone)]
+pub struct NewData {
+    pub new_blocks: Arc<RwLock<Vec<MainChainBlockBox>>>,
+    pub blocks_approves: Arc<RwLock<HashMap<[u8; 32], usize>>>,
+}
+
+impl Default for NewData {
+    fn default() -> Self {
+        Self {
+            new_blocks: Arc::new(RwLock::new(Vec::new())),
+            blocks_approves: Default::default(),
+        }
+    }
+}
+
+impl NewData {
+    pub fn new() -> NewData {
+        Default::default()
+    }
+
+    /// Adds new block to the data
+    ///
+    /// if the block already exists increases amount of approves and returns false
+    pub async fn new_block(&self, block: MainChainBlockBox) -> Result<bool, Report<BlockError>> {
+        let mut blocks_approves = self.blocks_approves.write().await;
+
+        let mut new_blocks = self.new_blocks.write().await;
+
+        let block_hash = block.hash()?;
+
+        let mut existed = true;
+        blocks_approves
+            .entry(block_hash)
+            .and_modify(|approves| *approves += 1)
+            .or_insert_with(|| {
+                existed = false;
+                0
+            });
+
+        if !existed {
+            return Ok(false);
+        }
+
+        match new_blocks.binary_search(&block) {
+            Ok(_) => {}
+            Err(pos) => new_blocks.insert(pos, block),
+        };
+
+        Ok(true)
+    }
+
+    //pub async fn get_block_approves(&self, hash: &[u8; 32]) -> usize {}
 }
 
 #[derive(Clone)]
@@ -36,6 +93,7 @@ pub struct NodeContext {
     pub propagate_packet: Sender<(u64, packet_models::Packet)>,
     pub new_peers_tx: Sender<SocketAddr>,
     pub blockchain: Arc<BlockChainTree>,
+    pub new_data: NewData,
 }
 
 /// Start node, entry point
@@ -85,10 +143,11 @@ async fn handle_incoming(
         res = handle_incoming_wrapped(
             socket,
             addr,
-            context.propagate_packet,
-            context.peers,
-            context.new_peers_tx,
-            context.blockchain) => {
+            context) => {
+            // context.propagate_packet,
+            // context.peers,
+            // context.new_peers_tx,
+            // context.blockchain) => {
                 match res {
                     Err(e) => error!("Unexpected error on peer {}: {:?}", addr, e),
                     Ok(_) => {}
@@ -105,16 +164,13 @@ async fn handle_incoming(
 async fn handle_incoming_wrapped(
     socket: TcpStream,
     addr: SocketAddr,
-    mut propagate: Sender<(u64, packet_models::Packet)>,
-    peers: Arc<RwLock<HashSet<SocketAddr>>>,
-    mut new_peers_tx: Sender<SocketAddr>,
-    blockchain: Arc<BlockChainTree>,
+    context: NodeContext,
 ) -> Result<(), NodeError> {
-    let mut rx_propagate = propagate.subscribe();
+    let mut rx_propagate = context.propagate_packet.subscribe();
 
     let mut waiting_response: HashSet<u64> = HashSet::with_capacity(20);
 
-    let mut socket = EncSocket::new_connection(socket, addr)
+    let mut socket = EncSocket::new_connection(socket, addr, *PEER_TIMEOUT)
         .await
         .map_err(|e| NodeError::ConnectToPeerError(addr, e))?;
 
@@ -135,11 +191,8 @@ async fn handle_incoming_wrapped(
             &mut socket,
             &packet,
             &mut waiting_response,
-            peers.clone(),
-            &mut propagate,
-            &mut new_peers_tx,
-            &blockchain,
             tools::current_time(),
+            &context,
         )
         .await
         {
@@ -166,15 +219,14 @@ async fn connect_to_peers(context: NodeContext) {
 
 pub async fn connect_to_peer(addr: SocketAddr, context: NodeContext) {
     debug!("Connecting to peer: {}", &addr);
+    let peers = context.peers.clone();
+
     let mut rx = context.shutdown.subscribe();
     tokio::select! {
         _ = rx.recv() => {},
         ret = handle_peer(
             &addr,
-            context.peers.clone(),
-            context.propagate_packet,
-            context.new_peers_tx,
-            context.blockchain
+            context
         ) => {
             match ret {
                 Err(e) => error!("Unexpected error on peer {}: {:?}", addr, e),
@@ -184,19 +236,13 @@ pub async fn connect_to_peer(addr: SocketAddr, context: NodeContext) {
     };
 
     // remove peer from active peers
-    let mut peers = context.peers.write().await;
+    let mut peers = peers.write().await;
     peers.remove(&addr);
 }
 
-pub async fn handle_peer(
-    addr: &SocketAddr,
-    peers_mut: Arc<RwLock<HashSet<SocketAddr>>>,
-    mut propagate: Sender<(u64, packet_models::Packet)>,
-    mut new_peers_tx: Sender<SocketAddr>,
-    blockchain: Arc<BlockChainTree>,
-) -> Result<(), NodeError> {
+pub async fn handle_peer(addr: &SocketAddr, context: NodeContext) -> Result<(), NodeError> {
     // set up
-    let mut rx_propagate = propagate.subscribe();
+    let mut rx_propagate = context.propagate_packet.subscribe();
 
     let mut socket = EncSocket::create_new_connection(addr.clone(), *PEER_TIMEOUT)
         .await
@@ -235,11 +281,8 @@ pub async fn handle_peer(
             &mut socket,
             &packet,
             &mut waiting_response,
-            peers_mut.clone(),
-            &mut propagate,
-            &mut new_peers_tx,
-            &blockchain,
             tools::current_time(),
+            &context,
         )
         .await
         {
@@ -258,11 +301,8 @@ async fn process_packet(
     socket: &mut EncSocket,
     packet: &packet_models::Packet,
     waiting_response: &HashSet<u64>,
-    peers_mut: Arc<RwLock<HashSet<SocketAddr>>>,
-    propagate: &mut Sender<(u64, packet_models::Packet)>,
-    new_peers_tx: &mut Sender<SocketAddr>,
-    blockchain: &Arc<BlockChainTree>,
     recieved_timestamp: u64,
+    context: &NodeContext,
 ) -> Result<(), NodeError> {
     match packet {
         packet_models::Packet::Request(r) => match r {
@@ -290,7 +330,7 @@ async fn process_packet(
                     return Ok(());
                 }
 
-                let mut peers = peers_mut.write().await;
+                let mut peers = context.peers.write().await;
                 let peer_doesnt_exist = peers.insert(addr);
                 drop(peers);
 
@@ -305,10 +345,12 @@ async fn process_packet(
                     let packet =
                         packet_models::Packet::Request(packet_models::Request::Announce(request));
 
-                    propagate
+                    context
+                        .propagate_packet
                         .send((packet_id, packet))
                         .map_err(|e| NodeError::PropagationSendError(addr, e.to_string()))?;
-                    new_peers_tx
+                    context
+                        .new_peers_tx
                         .send(addr)
                         .map_err(|e| NodeError::PropagationSendError(addr, e.to_string()))?;
                 }
@@ -327,7 +369,7 @@ async fn process_packet(
                 let address: [u8; 33] =
                     unsafe { p.to_owned().address.try_into().unwrap_unchecked() };
 
-                let funds = match blockchain.get_funds(&address).await {
+                let funds = match context.blockchain.get_funds(&address).await {
                     Err(e) => {
                         socket
                             .send(packet_models::Packet::Error(packet_models::ErrorR {
@@ -367,7 +409,7 @@ async fn process_packet(
                 let mut peers_cloned: Box<[SocketAddr]>;
                 {
                     // clone peers into vec
-                    let peers = peers_mut.read().await;
+                    let peers = context.peers.read().await;
                     peers_cloned = vec![*SERVER_ADDRESS; peers.len()].into_boxed_slice();
                     for (index, peer) in peers.iter().enumerate() {
                         let cell = unsafe { peers_cloned.get_unchecked_mut(index) };
@@ -396,7 +438,8 @@ async fn process_packet(
                 let packet = packet_models::Response::GetTransaction(
                     packet_models::GetTransactionResponse {
                         id: p.id,
-                        transaction: blockchain
+                        transaction: context
+                            .blockchain
                             .get_main_chain()
                             .find_transaction(&p.hash)
                             .await
@@ -415,7 +458,12 @@ async fn process_packet(
                     .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
             }
             packet_models::Request::GetBlockByHash(p) => {
-                let block_dump = match blockchain.get_main_chain().find_raw_by_hash(&p.hash).await {
+                let block_dump = match context
+                    .blockchain
+                    .get_main_chain()
+                    .find_raw_by_hash(&p.hash)
+                    .await
+                {
                     Err(e) => {
                         // socket
                         //     .send(packet_models::ErrorR {
@@ -440,7 +488,8 @@ async fn process_packet(
                     .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
             }
             packet_models::Request::GetBlockByHeight(p) => {
-                let block_dump = match blockchain
+                let block_dump = match context
+                    .blockchain
                     .get_main_chain()
                     .find_raw_by_height(p.height)
                     .await
@@ -479,7 +528,7 @@ async fn process_packet(
                     return Ok(());
                 }
 
-                let chain = blockchain.get_main_chain();
+                let chain = context.blockchain.get_main_chain();
                 let height = chain.get_height().await;
                 if height <= p.start {
                     return Err(NodeError::NotReachedHeightError(p.start as usize));
@@ -532,8 +581,17 @@ async fn process_packet(
                 )
                 .map_err(|e| NodeError::ParseTransactionError(e.to_string()))?;
 
+                // check if the transaction is with root as source
+                if transaction
+                    .get_sender()
+                    .eq(&blockchaintree::blockchaintree::ROOT_PUBLIC_ADDRESS)
+                {
+                    return Err(NodeError::SendFundsFromRoot);
+                }
+
                 // verify transaction
-                let last_block = blockchain
+                let last_block = context
+                    .blockchain
                     .get_main_chain()
                     .get_last_block()
                     .await
@@ -557,7 +615,8 @@ async fn process_packet(
                     return Err(NodeError::CreateTransactionError("Bad signature".into()));
                 }
 
-                blockchain
+                context
+                    .blockchain
                     .new_transaction(transaction)
                     .await
                     .map_err(|e| NodeError::CreateTransactionError(e.to_string()))?;
@@ -572,7 +631,8 @@ async fn process_packet(
                 let packet =
                     packet_models::Packet::Request(packet_models::Request::NewTransaction(request));
 
-                propagate
+                context
+                    .propagate_packet
                     .send((packet_id, packet))
                     .map_err(|e| NodeError::PropagationSendError(socket.addr, e.to_string()))?;
 
@@ -584,7 +644,24 @@ async fn process_packet(
                     .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
             }
             packet_models::Request::SubmitPow(p) => {
-                todo!()
+                if p.address.len() != 33 {
+                    return Err(NodeError::WrongAddressSize(p.address.len()));
+                }
+                if p.timestamp > recieved_timestamp {
+                    return Err(NodeError::TimestampInFutureError(
+                        p.timestamp,
+                        recieved_timestamp,
+                    ));
+                }
+                let pow = BigUint::from_bytes_be(&p.pow);
+
+                // cannot fail
+                let address: [u8; 33] = unsafe { p.address.clone().try_into().unwrap_unchecked() };
+
+                let new_block = context
+                    .blockchain
+                    .emit_main_chain_block(pow, address, p.timestamp)
+                    .await;
             }
         },
         packet_models::Packet::Response(r) => {}

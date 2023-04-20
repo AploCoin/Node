@@ -91,6 +91,7 @@ async fn main() -> errors::ResultSmall<()> {
         propagate_packet: txp,
         new_peers_tx,
         blockchain,
+        new_data: Default::default(),
     };
 
     // starting main tasks
