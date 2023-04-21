@@ -41,6 +41,13 @@ pub mod packet_models {
         GetBlocksByHeights(GetBlocksByHeightsRequest),
         NewTransaction(NewTransactionRequest),
         SubmitPow(SubmitPow),
+        NewBlock(NewBlockRequest),
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+    pub struct NewBlockRequest {
+        pub id: u64,
+        pub dump: Vec<u8>,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -114,6 +121,13 @@ pub mod packet_models {
         Ping(PingResponse),
         GetBlock(GetBlockResponse),
         GetBlocks(GetBlocksResponse),
+        SubmitPow(SubmitPowResponse),
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+    pub struct SubmitPowResponse {
+        pub id: u64,
+        pub accepted: bool,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]

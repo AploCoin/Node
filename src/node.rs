@@ -10,13 +10,11 @@ use crate::errors::*;
 use crate::models;
 use crate::models::*;
 use crate::tools;
-use blockchaintree::block::MainChainBlockBox;
-use blockchaintree::block::MainChainBlockRc;
+use blockchaintree::block::MainChainBlockArc;
 use blockchaintree::blockchaintree::BlockChainTree;
 use blockchaintree::transaction::Transactionable;
 use lazy_static::lazy_static;
 use num_bigint::BigUint;
-use std::rc::Rc;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{
@@ -34,7 +32,7 @@ lazy_static! {
 /// Holds new data passed to the node until several verifications
 #[derive(Clone)]
 pub struct NewData {
-    pub new_blocks: Arc<RwLock<Vec<MainChainBlockBox>>>,
+    pub new_blocks: Arc<RwLock<Vec<MainChainBlockArc>>>,
     pub blocks_approves: Arc<RwLock<HashMap<[u8; 32], usize>>>,
 }
 
@@ -48,14 +46,14 @@ impl Default for NewData {
 }
 
 impl NewData {
-    pub fn new() -> NewData {
-        Default::default()
-    }
+    // pub fn new() -> NewData {
+    //     Default::default()
+    // }
 
     /// Adds new block to the data
     ///
     /// if the block already exists increases amount of approves and returns false
-    pub async fn new_block(&self, block: MainChainBlockBox) -> bool {
+    pub async fn new_block(&self, block: MainChainBlockArc) -> bool {
         let mut blocks_approves = self.blocks_approves.write().await;
 
         let mut new_blocks = self.new_blocks.write().await;
@@ -73,6 +71,7 @@ impl NewData {
             .entry(block_hash)
             .and_modify(|approves| *approves += 1)
             .or_insert_with(|| {
+                debug!("The block with hash: {:?} didn't exist", block_hash);
                 existed = false;
                 1
             });
@@ -95,10 +94,16 @@ impl NewData {
 }
 
 #[derive(Clone)]
+pub struct PropagatedPacket {
+    packet: packet_models::Packet,
+    source_addr: SocketAddr,
+}
+
+#[derive(Clone)]
 pub struct NodeContext {
     pub peers: Arc<RwLock<HashSet<SocketAddr>>>,
     pub shutdown: Sender<u8>,
-    pub propagate_packet: Sender<(u64, packet_models::Packet)>,
+    pub propagate_packet: Sender<PropagatedPacket>,
     pub new_peers_tx: Sender<SocketAddr>,
     pub blockchain: Arc<BlockChainTree>,
     pub new_data: NewData,
@@ -150,7 +155,7 @@ async fn handle_incoming(
     tokio::select! {
         res = handle_incoming_wrapped(
             socket,
-            addr,
+            &addr,
             context) => {
             // context.propagate_packet,
             // context.peers,
@@ -171,26 +176,30 @@ async fn handle_incoming(
 /// Wrapped main body of incoming connection handler
 async fn handle_incoming_wrapped(
     socket: TcpStream,
-    addr: SocketAddr,
+    addr: &SocketAddr,
     context: NodeContext,
 ) -> Result<(), NodeError> {
     let mut rx_propagate = context.propagate_packet.subscribe();
 
     let mut waiting_response: HashSet<u64> = HashSet::with_capacity(20);
 
-    let mut socket = EncSocket::new_connection(socket, addr, *PEER_TIMEOUT)
+    let mut socket = EncSocket::new_connection(socket, *addr, *PEER_TIMEOUT)
         .await
-        .map_err(|e| NodeError::ConnectToPeerError(addr, e))?;
+        .map_err(|e| NodeError::ConnectToPeerError(*addr, e))?;
 
     // main loop
     loop {
         let packet = tokio::select! {
             propagate_message = rx_propagate.recv() => {
-                socket.send(propagate_message.map_err(|e| NodeError::PropagationReadError(addr, e))?).await.map_err(|e| NodeError::SendPacketError(addr, e))?;
+                let propagate_data = propagate_message.map_err(|e| NodeError::PropagationReadError(*addr, e))?;
+                if propagate_data.source_addr == *addr{
+                    continue;
+                }
+                socket.send( propagate_data.packet).await.map_err(|e| NodeError::SendPacketError(*addr, e))?;
                 continue;
             },
             packet = socket.recv::<packet_models::Packet>() => {
-                packet.map_err(|e| NodeError::ReceievePacketError(addr, e))?
+                packet.map_err(|e| NodeError::ReceievePacketError(*addr, e))?
             }
         };
 
@@ -275,8 +284,11 @@ pub async fn handle_peer(addr: &SocketAddr, context: NodeContext) -> Result<(), 
     loop {
         let packet = tokio::select! {
             propagate_message = rx_propagate.recv() => {
-                let packet = propagate_message.map_err(|e| NodeError::PropagationReadError(*addr, e))?;
-                socket.send(packet).await.map_err(|e| NodeError::SendPacketError(*addr, e))?;
+                let propagate_data = propagate_message.map_err(|e| NodeError::PropagationReadError(*addr, e))?;
+                if propagate_data.source_addr == *addr{
+                    continue;
+                }
+                socket.send(propagate_data.packet).await.map_err(|e| NodeError::SendPacketError(*addr, e))?;
                 continue;
             },
             packet = socket.recv::<packet_models::Packet>() => {
@@ -355,7 +367,10 @@ async fn process_packet(
 
                     context
                         .propagate_packet
-                        .send((packet_id, packet))
+                        .send(PropagatedPacket {
+                            packet,
+                            source_addr: socket.addr,
+                        })
                         .map_err(|e| NodeError::PropagationSendError(addr, e.to_string()))?;
                     context
                         .new_peers_tx
@@ -641,7 +656,10 @@ async fn process_packet(
 
                 context
                     .propagate_packet
-                    .send((packet_id, packet))
+                    .send(PropagatedPacket {
+                        packet,
+                        source_addr: socket.addr,
+                    })
                     .map_err(|e| NodeError::PropagationSendError(socket.addr, e.to_string()))?;
 
                 socket
@@ -660,20 +678,64 @@ async fn process_packet(
                         p.timestamp,
                         recieved_timestamp,
                     ));
+                } else if recieved_timestamp - p.timestamp > MAX_POW_SUBMIT_DELAY {
+                    return Err(NodeError::TimestampExpiredError);
                 }
                 let pow = BigUint::from_bytes_be(&p.pow);
 
                 // cannot fail
                 let address: [u8; 33] = unsafe { p.address.clone().try_into().unwrap_unchecked() };
 
-                let new_block = context
-                    .blockchain
-                    .emit_main_chain_block(pow, address, p.timestamp)
-                    .await
-                    .map_err(|e| NodeError::EmitMainChainBlockError(e.to_string()))?;
+                let new_block = unsafe {
+                    Arc::from_raw(Box::into_raw(
+                        context
+                            .blockchain
+                            .emit_main_chain_block(pow, address, p.timestamp)
+                            .await
+                            .map_err(|e| NodeError::EmitMainChainBlockError(e.to_string()))?,
+                    ))
+                };
 
-                context.new_data.new_block(new_block).await;
+                context.new_data.new_block(new_block.clone()).await;
+
+                let mut packet_id: u64 = rand::random();
+                while waiting_response.get(&packet_id).is_some() {
+                    packet_id = rand::random();
+                }
+
+                let block_packet = packet_models::Packet::Request(
+                    packet_models::Request::NewBlock(packet_models::NewBlockRequest {
+                        id: packet_id,
+                        dump: new_block
+                            .dump()
+                            .map_err(|e| {
+                                error!("Error dumping new block, fatal error");
+                                e
+                            })
+                            .unwrap(),
+                    }),
+                );
+                context
+                    .propagate_packet
+                    .send(PropagatedPacket {
+                        packet: block_packet,
+                        source_addr: socket.addr,
+                    })
+                    .map_err(|e| NodeError::PropagationSendError(socket.addr, e.to_string()))?;
+
+                let response_packet = packet_models::Packet::Response(
+                    packet_models::Response::SubmitPow(packet_models::SubmitPowResponse {
+                        id: p.id,
+                        accepted: true,
+                    }),
+                );
+
+                socket
+                    .send(response_packet)
+                    .await
+                    .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
             }
+            packet_models::Request::NewBlock(p) => {}
         },
         packet_models::Packet::Response(r) => {}
         packet_models::Packet::Error(e) => {

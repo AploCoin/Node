@@ -18,6 +18,8 @@ use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info};
 use tracing_subscriber::{fmt, layer::SubscriberExt, EnvFilter};
 
+use crate::node::PropagatedPacket;
+
 #[tokio::main]
 async fn main() -> errors::ResultSmall<()> {
     // load .env file
@@ -46,7 +48,7 @@ async fn main() -> errors::ResultSmall<()> {
 
     // configure channels
     let (tx, mut rx) = broadcast::channel::<u8>(1);
-    let (txp, _) = broadcast::channel::<(u64, models::packet_models::Packet)>(100);
+    let (txp, _) = broadcast::channel::<PropagatedPacket>(100);
     let (new_peers_tx, _) = broadcast::channel::<SocketAddr>(100);
 
     let peers: Arc<RwLock<HashSet<SocketAddr>>> =

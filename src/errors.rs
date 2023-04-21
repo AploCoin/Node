@@ -98,6 +98,9 @@ pub mod node_errors {
         #[error("The submitted timestamp is bigger, than the actual time {0:?} > {1:?}")]
         TimestampInFutureError(u64, u64),
 
+        #[error("Submitted timestamp is expired")]
+        TimestampExpiredError,
+
         #[error("Tried to send funds from the root address")]
         SendFundsFromRootError,
 
