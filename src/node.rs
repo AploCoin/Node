@@ -11,12 +11,12 @@ use crate::models;
 use crate::models::*;
 use crate::tools;
 use blockchaintree::block::MainChainBlockBox;
+use blockchaintree::block::MainChainBlockRc;
 use blockchaintree::blockchaintree::BlockChainTree;
-use blockchaintree::errors::BlockError;
 use blockchaintree::transaction::Transactionable;
-use error_stack::Report;
 use lazy_static::lazy_static;
 use num_bigint::BigUint;
+use std::rc::Rc;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{
@@ -55,12 +55,18 @@ impl NewData {
     /// Adds new block to the data
     ///
     /// if the block already exists increases amount of approves and returns false
-    pub async fn new_block(&self, block: MainChainBlockBox) -> Result<bool, Report<BlockError>> {
+    pub async fn new_block(&self, block: MainChainBlockBox) -> bool {
         let mut blocks_approves = self.blocks_approves.write().await;
 
         let mut new_blocks = self.new_blocks.write().await;
 
-        let block_hash = block.hash()?;
+        let block_hash = block
+            .hash()
+            .map_err(|e| {
+                error!("Failed to hash newly created block: {}", e.to_string());
+                e
+            })
+            .unwrap(); // smth went horribly wrong, it's safer to crash
 
         let mut existed = true;
         blocks_approves
@@ -68,11 +74,11 @@ impl NewData {
             .and_modify(|approves| *approves += 1)
             .or_insert_with(|| {
                 existed = false;
-                0
+                1
             });
 
         if !existed {
-            return Ok(false);
+            return false;
         }
 
         match new_blocks.binary_search(&block) {
@@ -80,10 +86,12 @@ impl NewData {
             Err(pos) => new_blocks.insert(pos, block),
         };
 
-        Ok(true)
+        true
     }
 
-    //pub async fn get_block_approves(&self, hash: &[u8; 32]) -> usize {}
+    pub async fn get_block_approves(&self, hash: &[u8; 32]) -> usize {
+        *self.blocks_approves.read().await.get(hash).unwrap_or(&0)
+    }
 }
 
 #[derive(Clone)]
@@ -586,7 +594,7 @@ async fn process_packet(
                     .get_sender()
                     .eq(&blockchaintree::blockchaintree::ROOT_PUBLIC_ADDRESS)
                 {
-                    return Err(NodeError::SendFundsFromRoot);
+                    return Err(NodeError::SendFundsFromRootError);
                 }
 
                 // verify transaction
@@ -645,7 +653,7 @@ async fn process_packet(
             }
             packet_models::Request::SubmitPow(p) => {
                 if p.address.len() != 33 {
-                    return Err(NodeError::WrongAddressSize(p.address.len()));
+                    return Err(NodeError::WrongAddressSizeError(p.address.len()));
                 }
                 if p.timestamp > recieved_timestamp {
                     return Err(NodeError::TimestampInFutureError(
@@ -661,12 +669,15 @@ async fn process_packet(
                 let new_block = context
                     .blockchain
                     .emit_main_chain_block(pow, address, p.timestamp)
-                    .await;
+                    .await
+                    .map_err(|e| NodeError::EmitMainChainBlockError(e.to_string()))?;
+
+                context.new_data.new_block(new_block).await;
             }
         },
         packet_models::Packet::Response(r) => {}
         packet_models::Packet::Error(e) => {
-            error!("Node: {:?} returned error: {:?}", socket.addr, e);
+            //error!("Node: {:?} returned error: {:?}", socket.addr, e);
             return Err(NodeError::RemoteNodeError(e.clone()));
         }
     }

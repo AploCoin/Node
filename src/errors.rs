@@ -99,17 +99,14 @@ pub mod node_errors {
         TimestampInFutureError(u64, u64),
 
         #[error("Tried to send funds from the root address")]
-        SendFundsFromRoot,
+        SendFundsFromRootError,
 
         #[error("Provided address is {0} but should be 33 bytes")]
-        WrongAddressSize(usize),
-        // #[error("Peer error")]
-        // PeerError,
-    }
+        WrongAddressSizeError(usize),
 
-    #[derive(Debug, Clone, Error)]
-    #[error("Peer closed connection")]
-    pub struct ConnectionClosed {}
+        #[error("Failed to emit new main chain block: {0}")]
+        EmitMainChainBlockError(String),
+    }
 }
 
 pub mod enc_socket_errors {
