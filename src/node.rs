@@ -89,7 +89,7 @@ impl NewData {
                 }
             });
 
-        if !existed {
+        if existed {
             return false;
         }
 
