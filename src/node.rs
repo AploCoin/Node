@@ -10,7 +10,7 @@ use crate::errors::*;
 use crate::models;
 use crate::models::*;
 use crate::tools;
-use blockchaintree::block::MainChainBlockArc;
+use blockchaintree::block::{self, MainChainBlockArc};
 use blockchaintree::blockchaintree::BlockChainTree;
 use blockchaintree::transaction::Transactionable;
 use lazy_static::lazy_static;
@@ -29,17 +29,23 @@ lazy_static! {
     static ref PEER_TIMEOUT: Duration = Duration::from_secs(15);
 }
 
+#[derive(Clone)]
+pub struct Approves {
+    pub total_approves: usize,
+    pub peers: HashSet<SocketAddr>,
+}
+
 /// Holds new data passed to the node until several verifications
 #[derive(Clone)]
 pub struct NewData {
-    pub new_blocks: Arc<RwLock<Vec<MainChainBlockArc>>>,
-    pub blocks_approves: Arc<RwLock<HashMap<[u8; 32], usize>>>,
+    pub new_blocks: Arc<RwLock<HashMap<u64, Vec<MainChainBlockArc>>>>,
+    pub blocks_approves: Arc<RwLock<HashMap<[u8; 32], Approves>>>,
 }
 
 impl Default for NewData {
     fn default() -> Self {
         Self {
-            new_blocks: Arc::new(RwLock::new(Vec::new())),
+            new_blocks: Arc::new(RwLock::new(Default::default())),
             blocks_approves: Default::default(),
         }
     }
@@ -53,7 +59,7 @@ impl NewData {
     /// Adds new block to the data
     ///
     /// if the block already exists increases amount of approves and returns false
-    pub async fn new_block(&self, block: MainChainBlockArc) -> bool {
+    pub async fn new_block(&self, block: MainChainBlockArc, peer: &SocketAddr) -> bool {
         let mut blocks_approves = self.blocks_approves.write().await;
 
         let mut new_blocks = self.new_blocks.write().await;
@@ -69,27 +75,46 @@ impl NewData {
         let mut existed = true;
         blocks_approves
             .entry(block_hash)
-            .and_modify(|approves| *approves += 1)
+            .and_modify(|approves| {
+                if !approves.peers.insert(*peer) {
+                    approves.total_approves += 1;
+                }
+            })
             .or_insert_with(|| {
                 debug!("The block with hash: {:?} didn't exist", block_hash);
                 existed = false;
-                1
+                Approves {
+                    total_approves: 1,
+                    peers: HashSet::from([*peer]),
+                }
             });
 
         if !existed {
             return false;
         }
 
-        match new_blocks.binary_search(&block) {
-            Ok(_) => {}
-            Err(pos) => new_blocks.insert(pos, block),
-        };
+        new_blocks
+            .entry(block.get_info().height)
+            .and_modify(|blocks| blocks.push(block.clone()))
+            .or_insert(vec![block]);
 
         true
     }
 
+    pub async fn get_blocks_same_height(&self, height: u64) -> Vec<MainChainBlockArc> {
+        if let Some(blocks) = self.new_blocks.read().await.get(&height) {
+            blocks.to_vec()
+        } else {
+            Vec::with_capacity(0)
+        }
+    }
+
     pub async fn get_block_approves(&self, hash: &[u8; 32]) -> usize {
-        *self.blocks_approves.read().await.get(hash).unwrap_or(&0)
+        if let Some(approves) = self.blocks_approves.read().await.get(hash) {
+            approves.total_approves
+        } else {
+            0
+        }
     }
 }
 
@@ -696,7 +721,10 @@ async fn process_packet(
                     ))
                 };
 
-                context.new_data.new_block(new_block.clone()).await;
+                context
+                    .new_data
+                    .new_block(new_block.clone(), &socket.addr)
+                    .await;
 
                 let mut packet_id: u64 = rand::random();
                 while waiting_response.get(&packet_id).is_some() {
@@ -735,7 +763,20 @@ async fn process_packet(
                     .await
                     .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
             }
-            packet_models::Request::NewBlock(p) => {}
+            packet_models::Request::NewBlock(p) => {
+                let recieved_block = block::deserialize_main_chain_block(&p.dump)
+                    .map_err(|e| NodeError::ParseBlockError(e.to_string()))?;
+
+                let recieved_block_arc = unsafe { Arc::from_raw(Box::into_raw(recieved_block)) };
+
+                if !context
+                    .new_data
+                    .new_block(recieved_block_arc, &socket.addr)
+                    .await
+                {
+                    // block was already in new data
+                };
+            }
         },
         packet_models::Packet::Response(r) => {}
         packet_models::Packet::Error(e) => {
