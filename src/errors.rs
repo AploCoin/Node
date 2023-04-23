@@ -83,6 +83,9 @@ pub mod node_errors {
         #[error("Error parsing transaction: {0:?}")]
         ParseTransactionError(String),
 
+        #[error("Error parsing block: {0:?}")]
+        ParseBlockError(String),
+
         #[error("Error creating transaction: {0:?}")]
         CreateTransactionError(String),
 

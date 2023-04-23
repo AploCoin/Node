@@ -8,3 +8,4 @@ lazy_static! {
 
 pub static MAX_BLOCKS_IN_RESPONSE: usize = 10;
 pub static MAX_POW_SUBMIT_DELAY: u64 = 10; // max delay of pow submission in seconds
+pub static MIN_BLOCK_APPROVE_TIME: usize = 180;
