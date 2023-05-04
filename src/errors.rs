@@ -112,6 +112,9 @@ pub mod node_errors {
 
         #[error("Failed to emit new main chain block: {0}")]
         EmitMainChainBlockError(String),
+
+        #[error("Failed to add new main chain block: {0}")]
+        AddMainChainBlockError(String),
     }
 }
 
