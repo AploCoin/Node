@@ -48,6 +48,7 @@ pub mod packet_models {
     pub struct NewBlockRequest {
         pub id: u64,
         pub dump: Vec<u8>,
+        pub transactions: Vec<u8>,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
