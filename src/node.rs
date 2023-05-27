@@ -162,6 +162,11 @@ pub async fn update_blockchain_wrapped(context: NodeContext) {
             }
         }
 
+        if max_height == 0 {
+            // new data is empty
+            continue;
+        }
+
         let blocks = new_data.get_blocks_same_height(max_height);
 
         let mut max_approves = Approves {

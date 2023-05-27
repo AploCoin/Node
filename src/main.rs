@@ -92,7 +92,7 @@ async fn main() -> errors::ResultSmall<()> {
         shutdown: tx,
         propagate_packet: txp,
         new_peers_tx,
-        blockchain,
+        blockchain: blockchain.clone(),
         new_data: Default::default(),
     };
 
@@ -139,6 +139,9 @@ async fn main() -> errors::ResultSmall<()> {
             );
         }
     }
+
+    info!("Flushing blockchain");
+    //blockchain.
 
     Ok(())
 }

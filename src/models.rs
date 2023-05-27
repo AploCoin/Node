@@ -435,6 +435,25 @@ mod dump_parse_tests {
     }
 
     #[test]
+    fn create_submitpow_response() {
+        let mut buf: Vec<u8> = Vec::new();
+        let mut serializer = rmp_serde::Serializer::new(&mut buf);
+
+        packet_models::Packet::Request(packet_models::Request::SubmitPow(
+            packet_models::SubmitPow {
+                id: 228,
+                pow: vec![0],
+                address: vec![1],
+                timestamp: 45,
+            },
+        ))
+        .serialize(&mut serializer)
+        .unwrap();
+
+        println!("{:X?}", buf);
+    }
+
+    #[test]
     fn dump_addresses_test() {
         let expected_ipv6 =
             b"\xfe\x80\xcd\x00\x00\x00\x0c\xde\x12\x57\x00\x00\x21\x1e\x72\x9c\x00\xff";
