@@ -16,6 +16,15 @@ pub mod models_errors {
         #[error("Bad address")]
         BadAddressError,
     }
+
+    // #[derive(Debug, Error)]
+    // pub enum DeserializeTransactionsError {
+    //     #[error("Supplied data with a wrong size")]
+    //     NotEnoughDataError,
+
+    //     #[error("Error")]
+
+    // }
 }
 
 pub mod node_errors {

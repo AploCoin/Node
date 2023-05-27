@@ -3,6 +3,7 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
+use crate::config;
 use crate::config::*;
 use crate::encsocket::EncSocket;
 use crate::errors::node_errors::NodeError;
@@ -10,10 +11,9 @@ use crate::errors::*;
 use crate::models;
 use crate::models::*;
 use crate::tools;
-use crate::{config, main};
-use blockchaintree::block::{self, MainChainBlockArc};
+use blockchaintree::block::{self, MainChainBlock, MainChainBlockArc};
 use blockchaintree::blockchaintree::BlockChainTree;
-use blockchaintree::transaction::Transactionable;
+use blockchaintree::transaction::{Transaction, Transactionable};
 use lazy_static::lazy_static;
 use num_bigint::BigUint;
 use std::sync::Arc;
@@ -22,7 +22,7 @@ use tokio::sync::{
     broadcast::{Receiver, Sender},
     RwLock,
 };
-use tokio::time::Duration;
+use tokio::time::{sleep, Duration};
 #[allow(unused_imports)]
 use tracing::{debug, error, info};
 
@@ -42,6 +42,7 @@ pub struct Approves {
 pub struct NewData {
     pub new_blocks: HashMap<u64, Vec<MainChainBlockArc>>,
     pub blocks_approves: HashMap<[u8; 32], Approves>,
+    pub transactions: HashMap<[u8; 32], Vec<Transaction>>,
 }
 
 impl Default for NewData {
@@ -49,6 +50,7 @@ impl Default for NewData {
         Self {
             new_blocks: Default::default(),
             blocks_approves: Default::default(),
+            transactions: Default::default(),
         }
     }
 }
@@ -64,6 +66,7 @@ impl NewData {
     pub async fn new_block(
         &mut self,
         block: MainChainBlockArc,
+        transactions: &Vec<Transaction>,
         peer: &SocketAddr,
         time_recieved: usize,
     ) -> bool {
@@ -107,6 +110,8 @@ impl NewData {
             .and_modify(|blocks| blocks.push(block.clone()))
             .or_insert(vec![block]);
 
+        self.transactions.insert(block_hash, transactions.clone());
+
         true
     }
 
@@ -120,6 +125,11 @@ impl NewData {
 
     pub fn get_block_approves(&self, hash: &[u8; 32]) -> Option<&Approves> {
         self.blocks_approves.get(hash)
+    }
+
+    pub fn clear(&mut self) {
+        self.blocks_approves.clear();
+        self.new_blocks.clear();
     }
 }
 
@@ -137,6 +147,64 @@ pub struct NodeContext {
     pub new_peers_tx: Sender<SocketAddr>,
     pub blockchain: Arc<BlockChainTree>,
     pub new_data: Arc<RwLock<NewData>>,
+}
+
+pub async fn update_blockchain_wrapped(context: NodeContext) {
+    let new_data = context.new_data.write().await;
+
+    loop {
+        sleep(Duration::from_secs(MIN_BLOCK_APPROVE_TIME as u64)).await;
+        let mut max_height: u64 = 0;
+
+        for height in new_data.new_blocks.keys() {
+            if *height > max_height {
+                max_height = *height;
+            }
+        }
+
+        let blocks = new_data.get_blocks_same_height(max_height);
+
+        let mut max_approves = Approves {
+            total_approves: 0,
+            peers: Default::default(),
+            last_recieved: 0,
+        };
+
+        let mut max_block: Option<Arc<dyn MainChainBlock + Send + Sync>> = None;
+
+        for block in blocks {
+            let approves = new_data.get_block_approves(&block.hash().unwrap()).unwrap();
+            if approves.total_approves > max_approves.total_approves {
+                max_approves = approves.clone();
+                max_block = Some(block);
+            }
+        }
+
+        let max_block = max_block.unwrap();
+
+        if tools::current_time() as usize - max_approves.last_recieved >= MIN_BLOCK_APPROVE_TIME {
+            context
+                .blockchain
+                .overwrite_main_chain_block(
+                    &max_block,
+                    new_data
+                        .transactions
+                        .get(&max_block.hash().unwrap())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+        }
+    }
+}
+
+pub async fn update_blockchain(context: NodeContext) {
+    let mut shutdown_reciever = context.shutdown.subscribe();
+
+    tokio::select! {
+        _ = update_blockchain_wrapped(context) => {},
+        _ = shutdown_reciever.recv() => {}
+    }
 }
 
 /// Start node, entry point
@@ -726,12 +794,12 @@ async fn process_packet(
                     ))
                 };
 
-                context
-                    .new_data
-                    .write()
-                    .await
-                    .new_block(new_block.clone(), &socket.addr, recieved_timestamp as usize)
-                    .await;
+                // context
+                //     .new_data
+                //     .write()
+                //     .await
+                //     .new_block(new_block.clone(), &socket.addr, recieved_timestamp as usize)
+                //     .await;
 
                 let mut packet_id: u64 = rand::random();
                 while waiting_response.get(&packet_id).is_some() {
@@ -761,9 +829,9 @@ async fn process_packet(
                         })
                         .unwrap();
 
-                    dumped_transactions.reserve(8 + dump.len());
+                    dumped_transactions.reserve(4 + dump.len());
 
-                    dumped_transactions.extend((dump.len() as u64).to_be_bytes());
+                    dumped_transactions.extend((dump.len() as u32).to_be_bytes());
                     dumped_transactions.extend(dump.iter());
                 }
 
@@ -804,6 +872,8 @@ async fn process_packet(
                 let recieved_block = block::deserialize_main_chain_block(&p.dump)
                     .map_err(|e| NodeError::ParseBlockError(e.to_string()))?;
 
+                let transactions = tools::deserialize_transactions(&p.transactions)?;
+
                 let recieved_block_arc = unsafe { Arc::from_raw(Box::into_raw(recieved_block)) };
 
                 let mut new_data = context.new_data.write().await;
@@ -829,10 +899,27 @@ async fn process_packet(
                                 ))?,
                         ))
                     };
+
+                    let main_chain = context.blockchain.get_main_chain();
+
+                    let mut transactions: Vec<Transaction> =
+                        Vec::with_capacity(existing_block.get_transactions().len());
+                    for tr_hash in existing_block.get_transactions().iter() {
+                        let transaction = main_chain
+                            .find_transaction(tr_hash)
+                            .await
+                            .map_err(|e| NodeError::FindTransactionError(e.to_string()))?
+                            .ok_or(NodeError::FindTransactionError(format!(
+                                "Transaction with hash {tr_hash:?} not found"
+                            )))?;
+                        transactions.push(transaction);
+                    }
+
                     // add block from the chain to the new data
                     new_data
                         .new_block(
                             existing_block,
+                            &transactions,
                             &SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0),
                             recieved_timestamp as usize,
                         )
@@ -842,6 +929,7 @@ async fn process_packet(
                 if !new_data
                     .new_block(
                         recieved_block_arc.clone(),
+                        &transactions,
                         &socket.addr,
                         recieved_timestamp as usize,
                     )
@@ -874,15 +962,79 @@ async fn process_packet(
                             if tools::current_time() as usize - approves.last_recieved
                                 >= config::MIN_BLOCK_APPROVE_TIME
                             {
-                                //context.blockchain.overwrite_main_chain_block(new_block, transactions)
+                                context
+                                    .blockchain
+                                    .overwrite_main_chain_block(&recieved_block_arc, &transactions)
+                                    .await
+                                    .map_err(|e| {
+                                        NodeError::AddMainChainBlockError(e.to_string())
+                                    })?;
                             }
                         }
-                        _ => {}
+                        _ => {
+                            let next_block = unsafe { blocks_same_height.get_unchecked(1) };
+                            let max_block_approves = new_data
+                                .get_block_approves(&max_block.hash().unwrap())
+                                .unwrap(); // critical error
+                            let next_block_approves = new_data
+                                .get_block_approves(&next_block.hash().unwrap())
+                                .unwrap(); // critical error
+
+                            if max_block_approves.total_approves
+                                >= next_block_approves.total_approves * 2
+                                || tools::current_time() as usize - max_block_approves.last_recieved
+                                    > MIN_BLOCK_APPROVE_TIME
+                            {
+                                context
+                                    .blockchain
+                                    .overwrite_main_chain_block(&max_block, &transactions)
+                                    .await
+                                    .map_err(|e| {
+                                        NodeError::AddMainChainBlockError(e.to_string())
+                                    })?;
+
+                                new_data.clear();
+                            }
+                        }
                     }
                 }
+
+                let mut packet_id: u64 = rand::random();
+                while waiting_response.get(&packet_id).is_some() {
+                    packet_id = rand::random();
+                }
+
+                let block_packet = packet_models::Packet::Request(
+                    packet_models::Request::NewBlock(packet_models::NewBlockRequest {
+                        id: packet_id,
+                        dump: recieved_block_arc
+                            .dump()
+                            .map_err(|e| {
+                                error!("Error dumping new block, fatal error");
+                                e
+                            })
+                            .unwrap(),
+                        transactions: p.transactions.to_owned(),
+                    }),
+                );
+
+                context
+                    .propagate_packet
+                    .send(PropagatedPacket {
+                        packet: block_packet,
+                        source_addr: socket.addr,
+                    })
+                    .map_err(|e| NodeError::PropagationSendError(socket.addr, e.to_string()))?;
+
+                socket
+                    .send(&packet_models::Packet::Response(
+                        packet_models::Response::Ok(packet_models::OkResponse { id: p.id }),
+                    ))
+                    .await
+                    .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
             }
         },
-        packet_models::Packet::Response(r) => {}
+        packet_models::Packet::Response(_) => {}
         packet_models::Packet::Error(e) => {
             //error!("Node: {:?} returned error: {:?}", socket.addr, e);
             return Err(NodeError::RemoteNodeError(e.clone()));

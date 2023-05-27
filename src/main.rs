@@ -105,6 +105,10 @@ async fn main() -> errors::ResultSmall<()> {
     let fut = node::connect_new_peers(context.clone());
     tokio::spawn(fut);
 
+    debug!("Starting blockchain updater task");
+    let fut = node::update_blockchain(context.clone());
+    tokio::spawn(fut);
+
     info!("Node started");
 
     // giving the node the time to subscribe

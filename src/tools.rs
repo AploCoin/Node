@@ -1,5 +1,6 @@
 use crate::errors::*;
 use crate::models::{dump_addresses, parse_ipv4, parse_ipv6, peers_dump};
+use blockchaintree::transaction::{Transaction, Transactionable};
 use rmp_serde::{Deserializer, Serializer};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -93,3 +94,50 @@ pub async fn dump_peers(peers_mut: Arc<RwLock<HashSet<SocketAddr>>>) -> ResultSm
 
     Ok(())
 }
+
+/// Deserialize a set of transactions
+///
+/// 4 bytes big-endian - size of the next transaction
+///
+/// actual transaction
+pub fn deserialize_transactions(data: &[u8]) -> Result<Vec<Transaction>, node_errors::NodeError> {
+    let mut index: usize = 0;
+    let mut transactions = Vec::new();
+    while index < data.len() {
+        if data.len() - index < 4 {
+            return Err(node_errors::NodeError::BadTransactionSizeError);
+        }
+
+        let size =
+            u64::from_be_bytes(unsafe { data[index..index + 4].try_into().unwrap_unchecked() });
+
+        index += 4;
+
+        if data.len() - index < size as usize {
+            return Err(node_errors::NodeError::BadTransactionSizeError);
+        }
+
+        let _header = data[index];
+        transactions.push(
+            Transaction::parse(&data[index + 1..index + size as usize], size - 1)
+                .map_err(|e| node_errors::NodeError::ParseTransactionError(e.to_string()))?,
+        );
+    }
+
+    Ok(transactions)
+}
+
+// pub fn serialize_transactions(transactions:&[Transaction]) -> Result<Vec<u8>, node_errors::NodeError>{
+//     let mut size = 0usize;
+//     for transaction in transactions{
+//         size += transaction.get_dump_size()+4;
+//     }
+//     let mut to_return = Vec::with_capacity(size);
+
+//     for transaction in transactions{
+//         let dump = transaction.dump().map_err(|e| )
+//         to_return.pus
+//     }
+
+//     Ok(to_return)
+// }
