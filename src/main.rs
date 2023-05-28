@@ -141,7 +141,7 @@ async fn main() -> errors::ResultSmall<()> {
     }
 
     info!("Flushing blockchain");
-    //blockchain.
+    blockchain.flush_blockchain().await.unwrap();
 
     Ok(())
 }
