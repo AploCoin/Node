@@ -627,11 +627,11 @@ async fn process_packet(
                     Ok(None) => None,
                 };
                 socket
-                    .send(packet_models::Response::GetBlock(
-                        packet_models::GetBlockResponse {
+                    .send(packet_models::Packet::Response(
+                        packet_models::Response::GetBlock(packet_models::GetBlockResponse {
                             id: p.id,
                             dump: block_dump,
-                        },
+                        }),
                     ))
                     .await
                     .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
