@@ -154,6 +154,7 @@ pub async fn update_blockchain_wrapped(context: NodeContext) {
 
     loop {
         sleep(Duration::from_secs(MIN_BLOCK_APPROVE_TIME as u64)).await;
+        info!("Updating blockchain");
         let mut max_height: u64 = 0;
 
         for height in new_data.new_blocks.keys() {
@@ -164,10 +165,13 @@ pub async fn update_blockchain_wrapped(context: NodeContext) {
 
         if max_height == 0 {
             // new data is empty
+            info!("No data to update in blockchain");
             continue;
         }
 
         let blocks = new_data.get_blocks_same_height(max_height);
+
+        debug!("Found {} blocks in new data", blocks.len());
 
         let mut max_approves = Approves {
             total_approves: 0,
