@@ -35,7 +35,7 @@ async fn main() -> errors::ResultSmall<()> {
             .with_writer(io::stdout)
             .with_thread_names(true),
     );
-    let file_appender = tracing_appender::rolling::daily("logs", "node_log");
+    let file_appender = tracing_appender::rolling::minutely("logs", "node_log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
     let collector = collector.with(
         fmt::Layer::new()
