@@ -105,7 +105,7 @@ pub fn deserialize_transactions(data: &[u8]) -> Result<Vec<Transaction>, node_er
     let mut transactions = Vec::new();
     while index < data.len() {
         if data.len() - index < 4 {
-            return Err(node_errors::NodeError::BadTransactionSizeError);
+            return Err(node_errors::NodeError::BadTransactionSize);
         }
 
         let size =
@@ -114,13 +114,13 @@ pub fn deserialize_transactions(data: &[u8]) -> Result<Vec<Transaction>, node_er
         index += 4;
 
         if data.len() - index < size as usize {
-            return Err(node_errors::NodeError::BadTransactionSizeError);
+            return Err(node_errors::NodeError::BadTransactionSize);
         }
 
         let _header = data[index];
         transactions.push(
             Transaction::parse(&data[index + 1..index + size as usize], size - 1)
-                .map_err(|e| node_errors::NodeError::ParseTransactionError(e.to_string()))?,
+                .map_err(|e| node_errors::NodeError::ParseTransaction(e.to_string()))?,
         );
     }
 

@@ -38,22 +38,22 @@ pub struct Approves {
 }
 
 /// Holds new data passed to the node until several verifications
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct NewData {
     pub new_blocks: HashMap<u64, Vec<MainChainBlockArc>>,
     pub blocks_approves: HashMap<[u8; 32], Approves>,
     pub transactions: HashMap<[u8; 32], Vec<Transaction>>,
 }
 
-impl Default for NewData {
-    fn default() -> Self {
-        Self {
-            new_blocks: Default::default(),
-            blocks_approves: Default::default(),
-            transactions: Default::default(),
-        }
-    }
-}
+// impl Default for NewData {
+//     fn default() -> Self {
+//         Self {
+//             new_blocks: Default::default(),
+//             blocks_approves: Default::default(),
+//             transactions: Default::default(),
+//         }
+//     }
+// }
 
 impl NewData {
     // pub fn new() -> NewData {
@@ -66,7 +66,7 @@ impl NewData {
     pub async fn new_block(
         &mut self,
         block: MainChainBlockArc,
-        transactions: &Vec<Transaction>,
+        transactions: &[Transaction],
         peer: &SocketAddr,
         time_recieved: usize,
     ) -> bool {
@@ -110,7 +110,8 @@ impl NewData {
             .and_modify(|blocks| blocks.push(block.clone()))
             .or_insert(vec![block]);
 
-        self.transactions.insert(block_hash, transactions.clone());
+        self.transactions
+            .insert(block_hash, transactions.to_owned());
 
         true
     }
@@ -192,6 +193,7 @@ pub async fn update_blockchain_wrapped(context: NodeContext) {
         let max_block = max_block.unwrap();
 
         if tools::current_time() as usize - max_approves.last_recieved >= MIN_BLOCK_APPROVE_TIME {
+            info!("Found old enough block to update blockchain");
             context
                 .blockchain
                 .overwrite_main_chain_block(
@@ -231,12 +233,12 @@ pub async fn start(context: NodeContext) -> Result<(), node_errors::NodeError> {
 
     let listener = TcpListener::bind(*SERVER_ADDRESS)
         .await
-        .map_err(|e| NodeError::BindSocketError(e))?;
+        .map_err(NodeError::BindSocket)?;
 
     loop {
         let (sock, addr) = tokio::select! {
             res = listener.accept() => {
-                res.map_err(|e| NodeError::AcceptConnectionError(e))?
+                res.map_err( NodeError::AcceptConnection)?
             },
             _ = rx.recv() => {
                 debug!("Recieved shutdown command");
@@ -268,10 +270,7 @@ async fn handle_incoming(
             // context.peers,
             // context.new_peers_tx,
             // context.blockchain) => {
-                match res {
-                    Err(e) => error!("Unexpected error on peer {}: {:?}", addr, e),
-                    Ok(_) => {}
-            }},
+                if let Err(e) = res { error!("Unexpected error on peer {}: {:?}", addr, e) }},
         _ = rx.recv() => {
 
         }
@@ -288,25 +287,25 @@ async fn handle_incoming_wrapped(
 ) -> Result<(), NodeError> {
     let mut rx_propagate = context.propagate_packet.subscribe();
 
-    let mut waiting_response: HashSet<u64> = HashSet::with_capacity(20);
+    let waiting_response: HashSet<u64> = HashSet::with_capacity(20);
 
     let mut socket = EncSocket::new_connection(socket, *addr, *PEER_TIMEOUT)
         .await
-        .map_err(|e| NodeError::ConnectToPeerError(*addr, e))?;
+        .map_err(|e| NodeError::ConnectToPeer(*addr, e))?;
 
     // main loop
     loop {
         let packet = tokio::select! {
             propagate_message = rx_propagate.recv() => {
-                let propagate_data = propagate_message.map_err(|e| NodeError::PropagationReadError(*addr, e))?;
+                let propagate_data = propagate_message.map_err(|e| NodeError::PropagationRead(*addr, e))?;
                 if propagate_data.source_addr == *addr{
                     continue;
                 }
-                socket.send( propagate_data.packet).await.map_err(|e| NodeError::SendPacketError(*addr, e))?;
+                socket.send( propagate_data.packet).await.map_err(|e| NodeError::SendPacket(*addr, e))?;
                 continue;
             },
             packet = socket.recv::<packet_models::Packet>() => {
-                packet.map_err(|e| NodeError::ReceievePacketError(*addr, e))?
+                packet.map_err(|e| NodeError::ReceievePacket(*addr, e))?
             }
         };
 
@@ -314,7 +313,7 @@ async fn handle_incoming_wrapped(
         if let Err(e) = process_packet(
             &mut socket,
             &packet,
-            &mut waiting_response,
+            &waiting_response,
             tools::current_time(),
             &context,
         )
@@ -352,10 +351,7 @@ pub async fn connect_to_peer(addr: SocketAddr, context: NodeContext) {
             &addr,
             context
         ) => {
-            match ret {
-                Err(e) => error!("Unexpected error on peer {}: {:?}", addr, e),
-                Ok(_) => {}
-            }
+            if let Err(e) = ret { error!("Unexpected error on peer {}: {:?}", addr, e) }
         }
     };
 
@@ -368,11 +364,11 @@ pub async fn handle_peer(addr: &SocketAddr, context: NodeContext) -> Result<(), 
     // set up
     let mut rx_propagate = context.propagate_packet.subscribe();
 
-    let mut socket = EncSocket::create_new_connection(addr.clone(), *PEER_TIMEOUT)
+    let mut socket = EncSocket::create_new_connection(*addr, *PEER_TIMEOUT)
         .await
-        .map_err(|e| NodeError::ConnectToPeerError(*addr, e))?;
+        .map_err(|e| NodeError::ConnectToPeer(*addr, e))?;
 
-    let mut waiting_response: HashSet<u64> = HashSet::with_capacity(20);
+    let waiting_response: HashSet<u64> = HashSet::with_capacity(20);
 
     // announce
     let id: u64 = rand::random();
@@ -385,21 +381,21 @@ pub async fn handle_peer(addr: &SocketAddr, context: NodeContext) -> Result<(), 
     socket
         .send(packet)
         .await
-        .map_err(|e| NodeError::SendPacketError(*addr, e))?;
+        .map_err(|e| NodeError::SendPacket(*addr, e))?;
 
     // main loop
     loop {
         let packet = tokio::select! {
             propagate_message = rx_propagate.recv() => {
-                let propagate_data = propagate_message.map_err(|e| NodeError::PropagationReadError(*addr, e))?;
+                let propagate_data = propagate_message.map_err(|e| NodeError::PropagationRead(*addr, e))?;
                 if propagate_data.source_addr == *addr{
                     continue;
                 }
-                socket.send(propagate_data.packet).await.map_err(|e| NodeError::SendPacketError(*addr, e))?;
+                socket.send(propagate_data.packet).await.map_err(|e| NodeError::SendPacket(*addr, e))?;
                 continue;
             },
             packet = socket.recv::<packet_models::Packet>() => {
-                packet.map_err(|e| NodeError::ReceievePacketError(*addr, e))?
+                packet.map_err(|e| NodeError::ReceievePacket(*addr, e))?
             }
         };
 
@@ -407,7 +403,7 @@ pub async fn handle_peer(addr: &SocketAddr, context: NodeContext) -> Result<(), 
         if let Err(e) = process_packet(
             &mut socket,
             &packet,
-            &mut waiting_response,
+            &waiting_response,
             tools::current_time(),
             &context,
         )
@@ -438,9 +434,9 @@ async fn process_packet(
                     packet_models::Response::Ping(packet_models::PingResponse { id: p.id }),
                 ))
                 .await
-                .map_err(|e| NodeError::SendPacketError(socket.addr, e))?,
+                .map_err(|e| NodeError::SendPacket(socket.addr, e))?,
             packet_models::Request::Announce(p) => {
-                let addr = bin2addr(&p.addr).map_err(|e| NodeError::BinToAddressError(e))?;
+                let addr = bin2addr(&p.addr).map_err(NodeError::BinToAddress)?;
 
                 // verify address is not loopback
                 if (addr.ip().is_loopback() && addr.port() == SERVER_ADDRESS.port())
@@ -452,7 +448,7 @@ async fn process_packet(
                     socket
                         .send(response_packet)
                         .await
-                        .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
+                        .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
 
                     return Ok(());
                 }
@@ -478,11 +474,11 @@ async fn process_packet(
                             packet,
                             source_addr: socket.addr,
                         })
-                        .map_err(|e| NodeError::PropagationSendError(addr, e.to_string()))?;
+                        .map_err(|e| NodeError::PropagationSend(addr, e.to_string()))?;
                     context
                         .new_peers_tx
                         .send(addr)
-                        .map_err(|e| NodeError::PropagationSendError(addr, e.to_string()))?;
+                        .map_err(|e| NodeError::PropagationSend(addr, e.to_string()))?;
                 }
             }
             packet_models::Request::GetAmount(p) => {
@@ -492,8 +488,8 @@ async fn process_packet(
                             code: packet_models::ErrorCode::BadBlockchainAddress,
                         }))
                         .await
-                        .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
-                    return Err(NodeError::BadBlockchainAddressSizeError(p.address.len()));
+                        .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
+                    return Err(NodeError::BadBlockchainAddressSize(p.address.len()));
                 }
 
                 let address: [u8; 33] =
@@ -506,9 +502,9 @@ async fn process_packet(
                                 code: packet_models::ErrorCode::UnexpectedInternalError,
                             }))
                             .await
-                            .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
+                            .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
 
-                        return Err(NodeError::GetFundsError(e.to_string()));
+                        return Err(NodeError::GetFunds(e.to_string()));
                     }
                     Ok(funds) => funds,
                 };
@@ -520,9 +516,9 @@ async fn process_packet(
                             code: packet_models::ErrorCode::UnexpectedInternalError,
                         }))
                         .await
-                        .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
+                        .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
 
-                    return Err(NodeError::GetFundsError(e.to_string()));
+                    return Err(NodeError::GetFunds(e.to_string()));
                 };
 
                 socket
@@ -533,7 +529,7 @@ async fn process_packet(
                         }),
                     ))
                     .await
-                    .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
+                    .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
             }
             packet_models::Request::GetNodes(p) => {
                 let mut peers_cloned: Box<[SocketAddr]>;
@@ -562,7 +558,7 @@ async fn process_packet(
                 socket
                     .send(packet)
                     .await
-                    .map_err(|e| NodeError::SendPacketError(socket.addr, e))?
+                    .map_err(|e| NodeError::SendPacket(socket.addr, e))?
             }
             packet_models::Request::GetTransaction(p) => {
                 let packet = packet_models::Response::GetTransaction(
@@ -573,10 +569,10 @@ async fn process_packet(
                             .get_main_chain()
                             .find_transaction(&p.hash)
                             .await
-                            .map_err(|e| NodeError::FindTransactionError(e.to_string()))?
+                            .map_err(|e| NodeError::FindTransaction(e.to_string()))?
                             .map(|tr| {
                                 tr.dump()
-                                    .map_err(|e| NodeError::FindTransactionError(e.to_string()))
+                                    .map_err(|e| NodeError::FindTransaction(e.to_string()))
                                     .unwrap() // TODO: remove unwrap
                             }),
                     },
@@ -585,7 +581,7 @@ async fn process_packet(
                 socket
                     .send(packet)
                     .await
-                    .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
+                    .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
             }
             packet_models::Request::GetBlockByHash(p) => {
                 let block_dump = match context
@@ -601,7 +597,7 @@ async fn process_packet(
                         //     })
                         //     .await
                         //     .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
-                        return Err(NodeError::GetBlockError(e.to_string()));
+                        return Err(NodeError::GetBlock(e.to_string()));
                     }
                     Ok(Some(block)) => Some(block),
                     Ok(None) => None,
@@ -615,7 +611,7 @@ async fn process_packet(
                         },
                     ))
                     .await
-                    .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
+                    .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
             }
             packet_models::Request::GetBlockByHeight(p) => {
                 let block_dump = match context
@@ -625,7 +621,7 @@ async fn process_packet(
                     .await
                 {
                     Err(e) => {
-                        return Err(NodeError::GetBlockError(e.to_string()));
+                        return Err(NodeError::GetBlock(e.to_string()));
                     }
                     Ok(Some(block)) => Some(block),
                     Ok(None) => None,
@@ -638,13 +634,11 @@ async fn process_packet(
                         }),
                     ))
                     .await
-                    .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
+                    .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
             }
             packet_models::Request::GetBlocksByHeights(p) => {
                 if p.amount as usize > config::MAX_BLOCKS_IN_RESPONSE {
-                    return Err(NodeError::TooMuchBlocksError(
-                        config::MAX_BLOCKS_IN_RESPONSE,
-                    ));
+                    return Err(NodeError::TooMuchBlocks(config::MAX_BLOCKS_IN_RESPONSE));
                 } else if p.amount == 0 {
                     socket
                         .send(packet_models::Packet::Response(
@@ -654,14 +648,14 @@ async fn process_packet(
                             }),
                         ))
                         .await
-                        .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
+                        .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
                     return Ok(());
                 }
 
                 let chain = context.blockchain.get_main_chain();
                 let height = chain.get_height().await;
                 if height <= p.start {
-                    return Err(NodeError::NotReachedHeightError(p.start as usize));
+                    return Err(NodeError::NotReachedHeight(p.start as usize));
                 }
 
                 let amount = if p.start + p.amount > height {
@@ -676,7 +670,7 @@ async fn process_packet(
                     if let Some(block) = chain
                         .find_raw_by_height(height)
                         .await
-                        .map_err(|e| NodeError::GetBlockError(e.to_string()))?
+                        .map_err(|e| NodeError::GetBlock(e.to_string()))?
                     {
                         blocks.push(block);
                     } else {
@@ -692,31 +686,31 @@ async fn process_packet(
                         }),
                     ))
                     .await
-                    .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
+                    .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
             }
             packet_models::Request::NewTransaction(p) => {
                 if p.transaction.len() < 4 {
-                    return Err(NodeError::BadTransactionSizeError);
+                    return Err(NodeError::BadTransactionSize);
                 }
                 let transaction_size: u32 = u32::from_be_bytes(unsafe {
                     p.transaction[0..4].try_into().unwrap_unchecked()
                 });
                 if p.transaction.len() - 4 != transaction_size as usize {
-                    return Err(NodeError::BadTransactionSizeError);
+                    return Err(NodeError::BadTransactionSize);
                 }
 
                 let transaction = blockchaintree::transaction::Transaction::parse(
                     &p.transaction[4..],
                     transaction_size as u64,
                 )
-                .map_err(|e| NodeError::ParseTransactionError(e.to_string()))?;
+                .map_err(|e| NodeError::ParseTransaction(e.to_string()))?;
 
                 // check if the transaction is with root as source
                 if transaction
                     .get_sender()
                     .eq(&blockchaintree::blockchaintree::ROOT_PUBLIC_ADDRESS)
                 {
-                    return Err(NodeError::SendFundsFromRootError);
+                    return Err(NodeError::SendFundsFromRoot);
                 }
 
                 // verify transaction
@@ -725,14 +719,14 @@ async fn process_packet(
                     .get_main_chain()
                     .get_last_block()
                     .await
-                    .map_err(|e| NodeError::CreateTransactionError(e.to_string()))?;
+                    .map_err(|e| NodeError::CreateTransaction(e.to_string()))?;
 
                 if let Some(last_block) = last_block {
                     let transaction_time = transaction.get_timestamp();
                     if transaction_time <= last_block.get_info().timestamp
                         || transaction_time > recieved_timestamp
                     {
-                        return Err(NodeError::CreateTransactionError(
+                        return Err(NodeError::CreateTransaction(
                             "Wrong transaction time".into(),
                         ));
                     }
@@ -740,16 +734,16 @@ async fn process_packet(
 
                 if !transaction
                     .verify()
-                    .map_err(|e| NodeError::CreateTransactionError(e.to_string()))?
+                    .map_err(|e| NodeError::CreateTransaction(e.to_string()))?
                 {
-                    return Err(NodeError::CreateTransactionError("Bad signature".into()));
+                    return Err(NodeError::CreateTransaction("Bad signature".into()));
                 }
 
                 context
                     .blockchain
                     .new_transaction(transaction)
                     .await
-                    .map_err(|e| NodeError::CreateTransactionError(e.to_string()))?;
+                    .map_err(|e| NodeError::CreateTransaction(e.to_string()))?;
 
                 let mut packet_id: u64 = rand::random();
                 while waiting_response.get(&packet_id).is_some() {
@@ -767,26 +761,26 @@ async fn process_packet(
                         packet,
                         source_addr: socket.addr,
                     })
-                    .map_err(|e| NodeError::PropagationSendError(socket.addr, e.to_string()))?;
+                    .map_err(|e| NodeError::PropagationSend(socket.addr, e.to_string()))?;
 
                 socket
                     .send(packet_models::Response::Ok(packet_models::OkResponse {
                         id: p.id,
                     }))
                     .await
-                    .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
+                    .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
             }
             packet_models::Request::SubmitPow(p) => {
                 if p.address.len() != 33 {
-                    return Err(NodeError::WrongAddressSizeError(p.address.len()));
+                    return Err(NodeError::WrongAddressSize(p.address.len()));
                 }
                 if p.timestamp > recieved_timestamp {
-                    return Err(NodeError::TimestampInFutureError(
+                    return Err(NodeError::TimestampInFuture(
                         p.timestamp,
                         recieved_timestamp,
                     ));
                 } else if recieved_timestamp - p.timestamp > MAX_POW_SUBMIT_DELAY {
-                    return Err(NodeError::TimestampExpiredError);
+                    return Err(NodeError::TimestampExpired);
                 }
                 let pow = BigUint::from_bytes_be(&p.pow);
 
@@ -799,7 +793,7 @@ async fn process_packet(
                             .blockchain
                             .emit_main_chain_block(pow, address, p.timestamp)
                             .await
-                            .map_err(|e| NodeError::EmitMainChainBlockError(e.to_string()))?,
+                            .map_err(|e| NodeError::EmitMainChainBlock(e.to_string()))?,
                     ))
                 };
 
@@ -834,7 +828,7 @@ async fn process_packet(
                                 "Error finding transaction {:?}, fatal error",
                                 transaction_hash
                             );
-                            NodeError::FindTransactionError("No such transaction in db".into())
+                            NodeError::FindTransaction("No such transaction in db".into())
                         })
                         .unwrap();
 
@@ -863,7 +857,7 @@ async fn process_packet(
                         packet: block_packet,
                         source_addr: socket.addr,
                     })
-                    .map_err(|e| NodeError::PropagationSendError(socket.addr, e.to_string()))?;
+                    .map_err(|e| NodeError::PropagationSend(socket.addr, e.to_string()))?;
 
                 let response_packet = packet_models::Packet::Response(
                     packet_models::Response::SubmitPow(packet_models::SubmitPowResponse {
@@ -875,11 +869,11 @@ async fn process_packet(
                 socket
                     .send(response_packet)
                     .await
-                    .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
+                    .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
             }
             packet_models::Request::NewBlock(p) => {
                 let recieved_block = block::deserialize_main_chain_block(&p.dump)
-                    .map_err(|e| NodeError::ParseBlockError(e.to_string()))?;
+                    .map_err(|e| NodeError::ParseBlock(e.to_string()))?;
 
                 let transactions = tools::deserialize_transactions(&p.transactions)?;
 
@@ -891,7 +885,7 @@ async fn process_packet(
                     .blockchain
                     .new_main_chain_block(&recieved_block_arc)
                     .await
-                    .map_err(|e| NodeError::AddMainChainBlockError(e.to_string()))?
+                    .map_err(|e| NodeError::AddMainChainBlock(e.to_string()))?
                 {
                     // diverging data
                     // get already existing block from the chain
@@ -902,8 +896,8 @@ async fn process_packet(
                                 .get_main_chain()
                                 .find_by_height(recieved_block_arc.get_info().height)
                                 .await
-                                .map_err(|e| NodeError::GetBlockError(e.to_string()))?
-                                .ok_or(NodeError::GetBlockError(
+                                .map_err(|e| NodeError::GetBlock(e.to_string()))?
+                                .ok_or(NodeError::GetBlock(
                                     "Couldn't find block with same height".into(),
                                 ))?,
                         ))
@@ -917,8 +911,8 @@ async fn process_packet(
                         let transaction = main_chain
                             .find_transaction(tr_hash)
                             .await
-                            .map_err(|e| NodeError::FindTransactionError(e.to_string()))?
-                            .ok_or(NodeError::FindTransactionError(format!(
+                            .map_err(|e| NodeError::FindTransaction(e.to_string()))?
+                            .ok_or(NodeError::FindTransaction(format!(
                                 "Transaction with hash {tr_hash:?} not found"
                             )))?;
                         transactions.push(transaction);
@@ -975,9 +969,7 @@ async fn process_packet(
                                     .blockchain
                                     .overwrite_main_chain_block(&recieved_block_arc, &transactions)
                                     .await
-                                    .map_err(|e| {
-                                        NodeError::AddMainChainBlockError(e.to_string())
-                                    })?;
+                                    .map_err(|e| NodeError::AddMainChainBlock(e.to_string()))?;
                             }
                         }
                         _ => {
@@ -996,11 +988,9 @@ async fn process_packet(
                             {
                                 context
                                     .blockchain
-                                    .overwrite_main_chain_block(&max_block, &transactions)
+                                    .overwrite_main_chain_block(max_block, &transactions)
                                     .await
-                                    .map_err(|e| {
-                                        NodeError::AddMainChainBlockError(e.to_string())
-                                    })?;
+                                    .map_err(|e| NodeError::AddMainChainBlock(e.to_string()))?;
 
                                 new_data.clear();
                             }
@@ -1033,20 +1023,20 @@ async fn process_packet(
                         packet: block_packet,
                         source_addr: socket.addr,
                     })
-                    .map_err(|e| NodeError::PropagationSendError(socket.addr, e.to_string()))?;
+                    .map_err(|e| NodeError::PropagationSend(socket.addr, e.to_string()))?;
 
                 socket
                     .send(&packet_models::Packet::Response(
                         packet_models::Response::Ok(packet_models::OkResponse { id: p.id }),
                     ))
                     .await
-                    .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
+                    .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
             }
         },
         packet_models::Packet::Response(_) => {}
         packet_models::Packet::Error(e) => {
             //error!("Node: {:?} returned error: {:?}", socket.addr, e);
-            return Err(NodeError::RemoteNodeError(e.clone()));
+            return Err(NodeError::RemoteNode(e.clone()));
         }
     }
 

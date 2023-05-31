@@ -274,7 +274,7 @@ pub fn bin2addr(bin: &[u8]) -> Result<SocketAddr, AddressError> {
             let addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::from(octets)), port);
             Ok(addr)
         }
-        _ => Err(models_errors::AddressError::BadAddressError),
+        _ => Err(models_errors::AddressError::BadAddress),
     }
 }
 
@@ -317,7 +317,7 @@ pub fn dump_addresses(addrs: &[SocketAddr]) -> (Option<Vec<u8>>, Option<Vec<u8>>
 
 pub fn parse_ipv4(data: &[u8]) -> Result<Vec<SocketAddr>, AddressError> {
     if data.len() % 6 != 0 {
-        return Err(AddressError::WronSizeIPv4Error);
+        return Err(AddressError::WronSizeIPv4);
     }
     let mut to_return: Vec<SocketAddr> = Vec::with_capacity(data.len() / 6);
 
@@ -340,7 +340,7 @@ pub fn parse_ipv4(data: &[u8]) -> Result<Vec<SocketAddr>, AddressError> {
 
 pub fn parse_ipv6(data: &[u8]) -> Result<Vec<SocketAddr>, AddressError> {
     if data.len() % 18 != 0 {
-        return Err(AddressError::WrongSizeIPv6Error);
+        return Err(AddressError::WrongSizeIPv6);
     }
     let mut to_return: Vec<SocketAddr> = Vec::with_capacity(data.len() / 18);
 
@@ -348,7 +348,7 @@ pub fn parse_ipv6(data: &[u8]) -> Result<Vec<SocketAddr>, AddressError> {
         let port: u16 = data[index + 17] as u16 + ((data[index + 16] as u16) << 8);
         let octets: [u8; 16] = data[index..index + 16]
             .try_into()
-            .map_err(|_| AddressError::WrongSizeIPv6Error)?;
+            .map_err(|_| AddressError::WrongSizeIPv6)?;
         let addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::from(octets)), port);
         to_return.push(addr);
     }

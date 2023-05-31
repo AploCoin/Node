@@ -78,12 +78,12 @@ impl EncSocket {
         socket
             .write(public.as_bytes())
             .await
-            .map_err(|e| EncSocketError::WriteSocketError(e))?;
+            .map_err(EncSocketError::WriteSocket)?;
 
         tokio::time::timeout(timeout, socket.read_exact(&mut buf))
             .await
-            .map_err(|_| EncSocketError::TimeoutError)?
-            .map_err(|e| EncSocketError::ReadSocketError(e))?;
+            .map_err(|_| EncSocketError::Timeout)?
+            .map_err(EncSocketError::ReadSocket)?;
 
         let other_public = PublicKey::from(buf);
         let shared = secret.diffie_hellman(&other_public);
@@ -110,13 +110,13 @@ impl EncSocket {
 
         tokio::time::timeout(timeout, socket.read_exact(&mut buf))
             .await
-            .map_err(|_| EncSocketError::TimeoutError)?
-            .map_err(|e| EncSocketError::ReadSocketError(e))?;
+            .map_err(|_| EncSocketError::Timeout)?
+            .map_err(EncSocketError::ReadSocket)?;
 
         socket
             .write(public.as_bytes())
             .await
-            .map_err(|e| EncSocketError::WriteSocketError(e))?;
+            .map_err(EncSocketError::WriteSocket)?;
 
         let other_public = PublicKey::from(buf);
         let shared = secret.diffie_hellman(&other_public);
@@ -138,8 +138,8 @@ impl EncSocket {
     ) -> Result<EncSocket, EncSocketError> {
         let stream = tokio::time::timeout(timeout, TcpStream::connect(addr))
             .await
-            .map_err(|_| EncSocketError::TimeoutError)?
-            .map_err(|e| EncSocketError::ConnectError {
+            .map_err(|_| EncSocketError::Timeout)?
+            .map_err(|e| EncSocketError::Connect {
                 address: addr,
                 reason: e,
             })?;
@@ -157,8 +157,8 @@ impl EncSocket {
                     self.socket.read_exact(&mut buffer[received_size..]),
                 )
                 .await
-                .map_err(|_| EncSocketError::TimeoutError)?
-                .map_err(|e| EncSocketError::ReadSocketError(e))?;
+                .map_err(|_| EncSocketError::Timeout)?
+                .map_err(EncSocketError::ReadSocket)?;
                 break;
             }
             tokio::time::timeout(
@@ -167,8 +167,8 @@ impl EncSocket {
                     .read_exact(&mut buffer[received_size..received_size + BUFFER_RECV_SIZE]),
             )
             .await
-            .map_err(|_| EncSocketError::TimeoutError)?
-            .map_err(|e| EncSocketError::ReadSocketError(e))?;
+            .map_err(|_| EncSocketError::Timeout)?
+            .map_err(EncSocketError::ReadSocket)?;
 
             received_size += BUFFER_RECV_SIZE;
         }
@@ -184,7 +184,7 @@ impl EncSocket {
         let packet_size = u32::from_be_bytes(recv_buffer) as usize;
 
         if packet_size > MAX_PACKET_SIZE {
-            return Err(EncSocketError::TooBigPacketError(packet_size));
+            return Err(EncSocketError::TooBigPacket(packet_size));
         }
 
         // read actual packet
@@ -198,11 +198,10 @@ impl EncSocket {
         // uncompress packet
         let mut decoded_data: Vec<u8> = Vec::with_capacity(packet_size);
         let cur = Cursor::new(recv_buffer);
-        let mut decoder =
-            zstd::Decoder::new(cur).map_err(|e| EncSocketError::DecompressError(e))?;
+        let mut decoder = zstd::Decoder::new(cur).map_err(EncSocketError::Decompress)?;
         decoder
             .read_to_end(&mut decoded_data)
-            .map_err(|e| EncSocketError::DecompressError(e))?;
+            .map_err(EncSocketError::Decompress)?;
 
         Ok((packet_size, decoded_data))
     }
@@ -211,14 +210,9 @@ impl EncSocket {
         let mut encoded_data: Vec<u8> = Vec::with_capacity(data.len());
 
         let cur = Cursor::new(&mut encoded_data);
-        let mut encoder =
-            zstd::Encoder::new(cur, 21).map_err(|e| EncSocketError::CompressError(e))?;
-        encoder
-            .write_all(&data)
-            .map_err(|e| EncSocketError::CompressError(e))?;
-        encoder
-            .finish()
-            .map_err(|e| EncSocketError::CompressError(e))?;
+        let mut encoder = zstd::Encoder::new(cur, 21).map_err(EncSocketError::Compress)?;
+        encoder.write_all(data).map_err(EncSocketError::Compress)?;
+        encoder.finish().map_err(EncSocketError::Compress)?;
 
         self.cipher.apply_keystream(&mut encoded_data);
         self.cipher.seek(0);
@@ -227,20 +221,20 @@ impl EncSocket {
         self.socket
             .write_all(packet_size)
             .await
-            .map_err(|e| EncSocketError::WriteSocketError(e))?;
+            .map_err(EncSocketError::WriteSocket)?;
         self.socket
             .write_all(&encoded_data)
             .await
-            .map_err(|e| EncSocketError::WriteSocketError(e))?;
+            .map_err(EncSocketError::WriteSocket)?;
 
         Ok(())
     }
 
     pub async fn recv<'a, PT: Deserialize<'a>>(&mut self) -> Result<PT, EncSocketError> {
-        Ok(PT::deserialize(&mut Deserializer::new(Cursor::new(
+        PT::deserialize(&mut Deserializer::new(Cursor::new(
             self.recv_raw().await?.1,
         )))
-        .map_err(|e| EncSocketError::DeserializeError(e))?)
+        .map_err(EncSocketError::Deserialize)
     }
 
     pub async fn send<PT: Serialize>(&mut self, packet: PT) -> Result<(), EncSocketError> {

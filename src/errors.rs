@@ -8,13 +8,13 @@ pub mod models_errors {
     #[derive(Debug, Error)]
     pub enum AddressError {
         #[error("The amount of bytes should be divisable by 6")]
-        WronSizeIPv4Error,
+        WronSizeIPv4,
 
         #[error("The amount of bytes should be divisable by 18")]
-        WrongSizeIPv6Error,
+        WrongSizeIPv6,
 
         #[error("Bad address")]
-        BadAddressError,
+        BadAddress,
     }
 
     // #[derive(Debug, Error)]
@@ -51,79 +51,79 @@ pub mod node_errors {
     #[derive(Debug, Error)]
     pub enum NodeError {
         #[error("Error connecting to peer {0:?}: {1:?}")]
-        ConnectToPeerError(SocketAddr, EncSocketError),
+        ConnectToPeer(SocketAddr, EncSocketError),
 
         #[error("Error sending packet {0:?}: {1:?}")]
-        SendPacketError(SocketAddr, EncSocketError),
+        SendPacket(SocketAddr, EncSocketError),
 
         #[error("Error recieving packet from {0:?}: {1:?}")]
-        ReceievePacketError(SocketAddr, EncSocketError),
+        ReceievePacket(SocketAddr, EncSocketError),
 
         #[error("Error reading propagation channel {0:?}: {1:?}")]
-        PropagationReadError(SocketAddr, RecvError),
+        PropagationRead(SocketAddr, RecvError),
 
         #[error("Error sending data to propagation channel {0:?}: {1:?}")]
-        PropagationSendError(SocketAddr, String),
+        PropagationSend(SocketAddr, String),
 
         #[error("Error converting binary to address: {0:?}")]
-        BinToAddressError(models_errors::AddressError),
+        BinToAddress(models_errors::AddressError),
 
         #[error("Error accepting connection: {0:?}")]
-        AcceptConnectionError(io::Error),
+        AcceptConnection(io::Error),
 
         #[error("Error binding socket: {0:?}")]
-        BindSocketError(io::Error),
+        BindSocket(io::Error),
 
         #[error("Error returned from remote node: {0:?}")]
-        RemoteNodeError(ErrorR),
+        RemoteNode(ErrorR),
 
         #[error("Address in blockchain should have size of 33 bytes, the supplied address had size: {0}")]
-        BadBlockchainAddressSizeError(usize),
+        BadBlockchainAddressSize(usize),
 
         #[error("Error getting funds from blockchain: {0:?}")]
-        GetFundsError(String),
+        GetFunds(String),
 
         #[error("Error getting block from blockchain: {0:?}")]
-        GetBlockError(String),
+        GetBlock(String),
 
         #[error("Error parsing transaction, bad size")]
-        BadTransactionSizeError,
+        BadTransactionSize,
 
         #[error("Error parsing transaction: {0:?}")]
-        ParseTransactionError(String),
+        ParseTransaction(String),
 
         #[error("Error parsing block: {0:?}")]
-        ParseBlockError(String),
+        ParseBlock(String),
 
         #[error("Error creating transaction: {0:?}")]
-        CreateTransactionError(String),
+        CreateTransaction(String),
 
         #[error("Error searching for transaction: {0:?}")]
-        FindTransactionError(String),
+        FindTransaction(String),
 
         #[error("Too much blocks requested, max: {0}")]
-        TooMuchBlocksError(usize),
+        TooMuchBlocks(usize),
 
         #[error("Chain hasn't yet reached that height")]
-        NotReachedHeightError(usize),
+        NotReachedHeight(usize),
 
         #[error("The submitted timestamp is bigger, than the actual time {0:?} > {1:?}")]
-        TimestampInFutureError(u64, u64),
+        TimestampInFuture(u64, u64),
 
         #[error("Submitted timestamp is expired")]
-        TimestampExpiredError,
+        TimestampExpired,
 
         #[error("Tried to send funds from the root address")]
-        SendFundsFromRootError,
+        SendFundsFromRoot,
 
         #[error("Provided address is {0} but should be 33 bytes")]
-        WrongAddressSizeError(usize),
+        WrongAddressSize(usize),
 
         #[error("Failed to emit new main chain block: {0}")]
-        EmitMainChainBlockError(String),
+        EmitMainChainBlock(String),
 
         #[error("Failed to add new main chain block: {0}")]
-        AddMainChainBlockError(String),
+        AddMainChainBlock(String),
     }
 }
 
@@ -137,30 +137,30 @@ pub mod enc_socket_errors {
     #[derive(Debug, Error)]
     pub enum EncSocketError {
         #[error("Error writing into socket: {0:?}")]
-        WriteSocketError(io::Error),
+        WriteSocket(io::Error),
 
         #[error("Error reading from socket: {0:?}")]
-        ReadSocketError(io::Error),
+        ReadSocket(io::Error),
 
         #[error("Error connecting to address {address:?} reason: {reason:?}")]
-        ConnectError {
+        Connect {
             address: SocketAddr,
             reason: io::Error,
         },
 
         #[error("Timeout Error")]
-        TimeoutError,
+        Timeout,
 
         #[error("Too big packet: {0:?}")]
-        TooBigPacketError(usize),
+        TooBigPacket(usize),
 
         #[error("Error decompressing packet: {0:?}")]
-        DecompressError(io::Error),
+        Decompress(io::Error),
 
         #[error("Error compressing packet: {0:?}")]
-        CompressError(io::Error),
+        Compress(io::Error),
 
         #[error("Packet deserialization error: {0:?}")]
-        DeserializeError(DeserializeError),
+        Deserialize(DeserializeError),
     }
 }
