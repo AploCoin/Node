@@ -141,3 +141,20 @@ pub fn deserialize_transactions(data: &[u8]) -> Result<Vec<Transaction>, node_er
 
 //     Ok(to_return)
 // }
+
+#[cfg(test)]
+mod dump_parse_tests {
+    use std::net::Ipv4Addr;
+
+    use super::*;
+
+    #[test]
+    fn dump_peers_test() {
+        let mut peers: HashSet<SocketAddr> = HashSet::new();
+
+        peers.insert(SocketAddr::new(
+            std::net::IpAddr::V4(Ipv4Addr::new(192, 168, 1, 5)),
+            5050,
+        ));
+    }
+}
