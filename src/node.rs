@@ -306,6 +306,12 @@ async fn handle_incoming_wrapped(
             },
             packet = socket.recv::<packet_models::Packet>() => {
                 packet.map_err(|e| NodeError::ReceievePacket(*addr, e))?
+            },
+            _ = sleep(Duration::from_millis(5000)) => {
+                let packet_id: u64 = rand::random();
+                socket.send(
+                    packet_models::Packet::Request(packet_models::Request::Ping(packet_models::PingRequest{id:packet_id}))).await.map_err(|e| NodeError::SendPacket(*addr, e))?;
+                continue;
             }
         };
 
