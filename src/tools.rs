@@ -123,6 +123,8 @@ pub fn deserialize_transactions(data: &[u8]) -> Result<Vec<Transaction>, node_er
             Transaction::parse(&data[index + 1..index + size as usize], size - 1)
                 .map_err(|e| node_errors::NodeError::ParseTransaction(e.to_string()))?,
         );
+
+        index += size as usize;
     }
 
     Ok(transactions)
