@@ -793,15 +793,11 @@ async fn process_packet(
                 // cannot fail
                 let address: [u8; 33] = unsafe { p.address.clone().try_into().unwrap_unchecked() };
 
-                let new_block = unsafe {
-                    Arc::from_raw(Box::into_raw(
-                        context
-                            .blockchain
-                            .emit_main_chain_block(pow, address, p.timestamp)
-                            .await
-                            .map_err(|e| NodeError::EmitMainChainBlock(e.to_string()))?,
-                    ))
-                };
+                let new_block = context
+                    .blockchain
+                    .emit_main_chain_block(pow, address, p.timestamp)
+                    .await
+                    .map_err(|e| NodeError::EmitMainChainBlock(e.to_string()))?;
 
                 // context
                 //     .new_data
@@ -883,31 +879,25 @@ async fn process_packet(
 
                 let transactions = tools::deserialize_transactions(&p.transactions)?;
 
-                let recieved_block_arc = unsafe { Arc::from_raw(Box::into_raw(recieved_block)) };
-
                 let mut new_data = context.new_data.write().await;
 
                 if !context
                     .blockchain
-                    .new_main_chain_block(&recieved_block_arc)
+                    .new_main_chain_block(&recieved_block)
                     .await
                     .map_err(|e| NodeError::AddMainChainBlock(e.to_string()))?
                 {
                     // diverging data
                     // get already existing block from the chain
-                    let existing_block = unsafe {
-                        Arc::from_raw(Box::into_raw(
-                            context
-                                .blockchain
-                                .get_main_chain()
-                                .find_by_height(recieved_block_arc.get_info().height)
-                                .await
-                                .map_err(|e| NodeError::GetBlock(e.to_string()))?
-                                .ok_or(NodeError::GetBlock(
-                                    "Couldn't find block with same height".into(),
-                                ))?,
-                        ))
-                    };
+                    let existing_block = context
+                        .blockchain
+                        .get_main_chain()
+                        .find_by_height(recieved_block.get_info().height)
+                        .await
+                        .map_err(|e| NodeError::GetBlock(e.to_string()))?
+                        .ok_or(NodeError::GetBlock(
+                            "Couldn't find block with same height".into(),
+                        ))?;
 
                     let main_chain = context.blockchain.get_main_chain();
 
@@ -937,7 +927,7 @@ async fn process_packet(
 
                 if !new_data
                     .new_block(
-                        recieved_block_arc.clone(),
+                        recieved_block.clone(),
                         &transactions,
                         &socket.addr,
                         recieved_timestamp as usize,
@@ -946,7 +936,7 @@ async fn process_packet(
                 {
                     // block was already in new data
                     let mut blocks_same_height =
-                        new_data.get_blocks_same_height(recieved_block_arc.get_info().height);
+                        new_data.get_blocks_same_height(recieved_block.get_info().height);
 
                     // sort ascending with approves
                     blocks_same_height.sort_by(|a, b| {
@@ -973,7 +963,7 @@ async fn process_packet(
                             {
                                 context
                                     .blockchain
-                                    .overwrite_main_chain_block(&recieved_block_arc, &transactions)
+                                    .overwrite_main_chain_block(&recieved_block, &transactions)
                                     .await
                                     .map_err(|e| NodeError::AddMainChainBlock(e.to_string()))?;
                             }
@@ -1012,7 +1002,7 @@ async fn process_packet(
                 let block_packet = packet_models::Packet::Request(
                     packet_models::Request::NewBlock(packet_models::NewBlockRequest {
                         id: packet_id,
-                        dump: recieved_block_arc
+                        dump: recieved_block
                             .dump()
                             .map_err(|e| {
                                 error!("Error dumping new block, fatal error");
