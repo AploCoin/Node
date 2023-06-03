@@ -18,3 +18,4 @@ peers.dump
 
 logs/
 BlockChainTree/
+.env
