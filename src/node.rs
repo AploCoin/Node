@@ -151,60 +151,62 @@ pub struct NodeContext {
 }
 
 pub async fn update_blockchain_wrapped(context: NodeContext) {
-    let new_data = context.new_data.write().await;
-
     loop {
         sleep(Duration::from_secs(MIN_BLOCK_APPROVE_TIME as u64)).await;
         info!("Updating blockchain");
-        let mut max_height: u64 = 0;
+        {
+            let new_data = context.new_data.write().await;
+            let mut max_height: u64 = 0;
 
-        for height in new_data.new_blocks.keys() {
-            if *height > max_height {
-                max_height = *height;
+            for height in new_data.new_blocks.keys() {
+                if *height > max_height {
+                    max_height = *height;
+                }
             }
-        }
 
-        if max_height == 0 {
-            // new data is empty
-            info!("No data to update in blockchain");
-            continue;
-        }
-
-        let blocks = new_data.get_blocks_same_height(max_height);
-
-        debug!("Found {} blocks in new data", blocks.len());
-
-        let mut max_approves = Approves {
-            total_approves: 0,
-            peers: Default::default(),
-            last_recieved: 0,
-        };
-
-        let mut max_block: Option<Arc<dyn MainChainBlock + Send + Sync>> = None;
-
-        for block in blocks {
-            let approves = new_data.get_block_approves(&block.hash().unwrap()).unwrap();
-            if approves.total_approves > max_approves.total_approves {
-                max_approves = approves.clone();
-                max_block = Some(block);
+            if max_height == 0 {
+                // new data is empty
+                info!("No data to update in blockchain");
+                continue;
             }
-        }
 
-        let max_block = max_block.unwrap();
+            let blocks = new_data.get_blocks_same_height(max_height);
 
-        if tools::current_time() as usize - max_approves.last_recieved >= MIN_BLOCK_APPROVE_TIME {
-            info!("Found old enough block to update blockchain");
-            context
-                .blockchain
-                .overwrite_main_chain_block(
-                    &max_block,
-                    new_data
-                        .transactions
-                        .get(&max_block.hash().unwrap())
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
+            debug!("Found {} blocks in new data", blocks.len());
+
+            let mut max_approves = Approves {
+                total_approves: 0,
+                peers: Default::default(),
+                last_recieved: 0,
+            };
+
+            let mut max_block: Option<Arc<dyn MainChainBlock + Send + Sync>> = None;
+
+            for block in blocks {
+                let approves = new_data.get_block_approves(&block.hash().unwrap()).unwrap();
+                if approves.total_approves > max_approves.total_approves {
+                    max_approves = approves.clone();
+                    max_block = Some(block);
+                }
+            }
+
+            let max_block = max_block.unwrap();
+
+            if tools::current_time() as usize - max_approves.last_recieved >= MIN_BLOCK_APPROVE_TIME
+            {
+                info!("Found old enough block to update blockchain");
+                context
+                    .blockchain
+                    .overwrite_main_chain_block(
+                        &max_block,
+                        new_data
+                            .transactions
+                            .get(&max_block.hash().unwrap())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+            }
         }
     }
 }
