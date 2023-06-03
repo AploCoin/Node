@@ -109,7 +109,8 @@ pub fn deserialize_transactions(data: &[u8]) -> Result<Vec<Transaction>, node_er
         }
 
         let size =
-            u64::from_be_bytes(unsafe { data[index..index + 4].try_into().unwrap_unchecked() });
+            u32::from_be_bytes(unsafe { data[index..index + 4].try_into().unwrap_unchecked() })
+                as u64;
 
         index += 4;
 
@@ -148,13 +149,15 @@ mod dump_parse_tests {
 
     use super::*;
 
-    #[test]
-    fn dump_peers_test() {
+    #[tokio::test]
+    async fn dump_peers_test() {
         let mut peers: HashSet<SocketAddr> = HashSet::new();
 
         peers.insert(SocketAddr::new(
-            std::net::IpAddr::V4(Ipv4Addr::new(192, 168, 1, 5)),
+            std::net::IpAddr::V4(Ipv4Addr::new(192, 168, 1, 213)),
             5050,
         ));
+
+        dump_peers(Arc::new(RwLock::new(peers))).await.unwrap()
     }
 }
