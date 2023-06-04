@@ -38,6 +38,7 @@ pub mod packet_models {
         Ping(PingRequest),
         GetBlockByHash(GetBlockByHashRequest),
         GetBlockByHeight(GetBlockByHeightRequest),
+        GetLastBlock(GetLastBlockRequest),
         GetBlocksByHeights(GetBlocksByHeightsRequest),
         NewTransaction(NewTransactionRequest),
         SubmitPow(SubmitPow),
@@ -61,6 +62,11 @@ pub mod packet_models {
 
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
     pub struct GetNodesRequest {
+        pub id: u64,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+    pub struct GetLastBlockRequest {
         pub id: u64,
     }
 

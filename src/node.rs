@@ -295,6 +295,14 @@ async fn handle_incoming_wrapped(
         .await
         .map_err(|e| NodeError::ConnectToPeer(*addr, e))?;
 
+    let packet = packet_models::Packet::Request(packet_models::Request::GetNodes(
+        packet_models::GetNodesRequest { id: 0 },
+    ));
+    socket
+        .send(packet)
+        .await
+        .map_err(|e| NodeError::SendPacket(*addr, e))?;
+
     // main loop
     loop {
         let packet = tokio::select! {
@@ -386,6 +394,14 @@ pub async fn handle_peer(addr: &SocketAddr, context: NodeContext) -> Result<(), 
         packet_models::AnnounceRequest { id, addr: body },
     ));
 
+    socket
+        .send(packet)
+        .await
+        .map_err(|e| NodeError::SendPacket(*addr, e))?;
+
+    let packet = packet_models::Packet::Request(packet_models::Request::GetNodes(
+        packet_models::GetNodesRequest { id: 0 },
+    ));
     socket
         .send(packet)
         .await
@@ -691,6 +707,30 @@ async fn process_packet(
                         packet_models::Response::GetBlocks(packet_models::GetBlocksResponse {
                             id: p.id,
                             blocks,
+                        }),
+                    ))
+                    .await
+                    .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
+            }
+            packet_models::Request::GetLastBlock(p) => {
+                let block_dump = match context
+                    .blockchain
+                    .get_main_chain()
+                    .get_last_raw_block()
+                    .await
+                {
+                    Err(e) => {
+                        return Err(NodeError::GetBlock(e.to_string()));
+                    }
+                    Ok(Some(block)) => Some(block),
+                    Ok(None) => None,
+                };
+
+                socket
+                    .send(packet_models::Packet::Response(
+                        packet_models::Response::GetBlock(packet_models::GetBlockResponse {
+                            id: p.id,
+                            dump: block_dump,
                         }),
                     ))
                     .await
@@ -1031,7 +1071,52 @@ async fn process_packet(
                     .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
             }
         },
-        packet_models::Packet::Response(_) => {}
+        packet_models::Packet::Response(r) => match r {
+            packet_models::Response::Ok(_) => {}
+            packet_models::Response::GetNodes(p) => {
+                if let Some(dump) = &p.ipv4 {
+                    let parsed = parse_ipv4(&dump).map_err(NodeError::BinToAddress)?;
+                    for addr in parsed {
+                        if (addr.ip().is_loopback() && addr.port() == SERVER_ADDRESS.port())
+                            || addr.ip().is_unspecified()
+                        {
+                            continue;
+                        }
+                        if !context.peers.write().await.insert(addr) {
+                            continue;
+                        };
+                        context
+                            .new_peers_tx
+                            .send(addr)
+                            .map_err(|e| NodeError::PropagationSend(addr, e.to_string()))?;
+                    }
+                }
+
+                if let Some(dump) = &p.ipv6 {
+                    let parsed = parse_ipv4(&dump).map_err(NodeError::BinToAddress)?;
+                    for addr in parsed {
+                        if (addr.ip().is_loopback() && addr.port() == SERVER_ADDRESS.port())
+                            || addr.ip().is_unspecified()
+                        {
+                            continue;
+                        }
+                        if !context.peers.write().await.insert(addr) {
+                            continue;
+                        };
+                        context
+                            .new_peers_tx
+                            .send(addr)
+                            .map_err(|e| NodeError::PropagationSend(addr, e.to_string()))?;
+                    }
+                }
+            }
+            packet_models::Response::GetAmount(_) => todo!(),
+            packet_models::Response::GetTransaction(_) => todo!(),
+            packet_models::Response::Ping(_) => todo!(),
+            packet_models::Response::GetBlock(_) => todo!(),
+            packet_models::Response::GetBlocks(_) => todo!(),
+            packet_models::Response::SubmitPow(_) => todo!(),
+        },
         packet_models::Packet::Error(e) => {
             //error!("Node: {:?} returned error: {:?}", socket.addr, e);
             return Err(NodeError::RemoteNode(e.clone()));
