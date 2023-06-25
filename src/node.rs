@@ -1,7 +1,8 @@
 #![allow(arithmetic_overflow)]
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::str::FromStr;
 
 use crate::config;
 use crate::config::*;
@@ -128,13 +129,30 @@ impl NewData {
         self.blocks_approves.get(hash)
     }
 
+    /// Remove all block intries, including transactions and approves
+    pub fn remove_blocks(&mut self, height: u64) {
+        let blocks = match self.new_blocks.get(&height) {
+            Some(block) => block,
+            None => {
+                return;
+            }
+        };
+        for block in blocks {
+            let hash = block.hash().unwrap();
+            self.blocks_approves.remove(&hash);
+            for tr in block.get_transactions().iter() {
+                self.transactions.remove(tr);
+            }
+        }
+    }
+
     pub fn clear(&mut self) {
         self.blocks_approves.clear();
         self.new_blocks.clear();
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PropagatedPacket {
     packet: packet_models::Packet,
     source_addr: SocketAddr,
@@ -155,7 +173,7 @@ pub async fn update_blockchain_wrapped(context: NodeContext) {
         sleep(Duration::from_secs(MIN_BLOCK_APPROVE_TIME as u64)).await;
         info!("Updating blockchain");
         {
-            let new_data = context.new_data.write().await;
+            let mut new_data = context.new_data.write().await;
             let mut max_height: u64 = 0;
 
             for height in new_data.new_blocks.keys() {
@@ -206,6 +224,32 @@ pub async fn update_blockchain_wrapped(context: NodeContext) {
                     )
                     .await
                     .unwrap();
+
+                let height = max_block.get_info().height;
+
+                if let Some(e) = context
+                    .propagate_packet
+                    .send(PropagatedPacket {
+                        packet: packet_models::Packet::Request(
+                            packet_models::Request::GetBlocksByHeights(
+                                packet_models::GetBlocksByHeightsRequest {
+                                    id: 0,
+                                    start: height + 1,
+                                    amount: MAX_BLOCKS_SYNC_AMOUNT as u64,
+                                },
+                            ),
+                        ),
+                        source_addr: SocketAddr::V4(unsafe {
+                            SocketAddrV4::from_str("0.0.0.0:0").unwrap_unchecked()
+                        }),
+                    })
+                    .err()
+                {
+                    error!("Error propagating packet {:?}", e);
+                }
+
+                debug!("Removing blocks from a new info");
+                new_data.remove_blocks(max_block.get_info().height);
             }
         }
     }
@@ -1114,7 +1158,7 @@ async fn process_packet(
             packet_models::Response::GetTransaction(_) => todo!(),
             packet_models::Response::Ping(_) => todo!(),
             packet_models::Response::GetBlock(_) => todo!(),
-            packet_models::Response::GetBlocks(_) => todo!(),
+            packet_models::Response::GetBlocks(p) => {}
             packet_models::Response::SubmitPow(_) => todo!(),
         },
         packet_models::Packet::Error(e) => {
