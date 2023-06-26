@@ -10,7 +10,6 @@ use crate::encsocket::EncSocket;
 use crate::errors::node_errors::NodeError;
 use crate::errors::*;
 use crate::models;
-use crate::models::packet_models::NewBlockRequest;
 use crate::models::*;
 use crate::tools;
 use blockchaintree::block::{self, MainChainBlock, MainChainBlockArc};
@@ -490,15 +489,13 @@ pub async fn handle_peer(addr: &SocketAddr, context: NodeContext) -> Result<(), 
 }
 
 async fn new_block(
-    packet: &NewBlockRequest,
+    recieved_block: Arc<dyn MainChainBlock + Send + Sync>,
+    transaction_dumps: &[u8],
     context: &NodeContext,
     socket: &mut EncSocket,
     recieved_timestamp: u64,
 ) -> Result<(), NodeError> {
-    let recieved_block = block::deserialize_main_chain_block(&packet.dump)
-        .map_err(|e| NodeError::ParseBlock(e.to_string()))?;
-
-    let transactions = tools::deserialize_transactions(&packet.transactions)?;
+    let transactions = tools::deserialize_transactions(transaction_dumps)?;
 
     let mut new_data = context.new_data.write().await;
 
@@ -840,6 +837,7 @@ async fn process_packet(
                             packet_models::Response::GetBlocks(packet_models::GetBlocksResponse {
                                 id: p.id,
                                 blocks: Vec::new(),
+                                transactions: Vec::new(),
                             }),
                         ))
                         .await
@@ -860,14 +858,22 @@ async fn process_packet(
                 };
 
                 let mut blocks: Vec<Vec<u8>> = Vec::with_capacity(amount as usize);
+                let mut transactions: Vec<Vec<u8>> = Vec::with_capacity(amount as usize);
 
                 for height in p.start..p.start + amount {
                     if let Some(block) = chain
-                        .find_raw_by_height(height)
+                        .find_by_height(height)
                         .await
                         .map_err(|e| NodeError::GetBlock(e.to_string()))?
                     {
-                        blocks.push(block);
+                        let mut trs_to_add: Vec<u8> = Vec::new();
+                        for tr_hash in block.get_transactions().iter() {
+                            let tr = chain.find_transaction_raw(tr_hash).await.unwrap().unwrap(); // critical error
+
+                            trs_to_add.extend_from_slice(&tr.len().to_be_bytes());
+                        }
+                        transactions.push(trs_to_add);
+                        blocks.push(block.dump().unwrap());
                     } else {
                         break;
                     }
@@ -878,6 +884,7 @@ async fn process_packet(
                         packet_models::Response::GetBlocks(packet_models::GetBlocksResponse {
                             id: p.id,
                             blocks,
+                            transactions,
                         }),
                     ))
                     .await
@@ -1087,7 +1094,16 @@ async fn process_packet(
                     .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
             }
             packet_models::Request::NewBlock(p) => {
-                new_block(p, context, socket, recieved_timestamp).await?;
+                let recieved_block = block::deserialize_main_chain_block(&p.dump)
+                    .map_err(|e| NodeError::ParseBlock(e.to_string()))?;
+                new_block(
+                    recieved_block,
+                    &p.transactions,
+                    context,
+                    socket,
+                    recieved_timestamp,
+                )
+                .await?;
 
                 let mut packet_id: u64 = rand::random();
                 while waiting_response.get(&packet_id).is_some() {
@@ -1161,7 +1177,30 @@ async fn process_packet(
             packet_models::Response::GetTransaction(_) => todo!(),
             packet_models::Response::Ping(_) => todo!(),
             packet_models::Response::GetBlock(_) => todo!(),
-            packet_models::Response::GetBlocks(p) => {}
+            packet_models::Response::GetBlocks(p) => {
+                let mut recieved_blocks: Vec<Arc<dyn MainChainBlock + Send + Sync>> =
+                    Vec::with_capacity(p.blocks.len());
+
+                for block in p.blocks.iter().map(|dump| {
+                    block::deserialize_main_chain_block(dump)
+                        .map_err(|e| NodeError::ParseBlock(e.to_string()))
+                }) {
+                    recieved_blocks.push(block?);
+                }
+
+                for (block, transactions_dumped) in
+                    recieved_blocks.into_iter().zip(p.transactions.iter())
+                {
+                    new_block(
+                        block,
+                        transactions_dumped,
+                        context,
+                        socket,
+                        recieved_timestamp,
+                    )
+                    .await?;
+                }
+            }
             packet_models::Response::SubmitPow(_) => todo!(),
         },
         packet_models::Packet::Error(e) => {
