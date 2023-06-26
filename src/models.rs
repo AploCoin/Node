@@ -170,6 +170,7 @@ pub mod packet_models {
     pub struct GetBlocksResponse {
         pub id: u64,
         pub blocks: Vec<Vec<u8>>,
+        pub transactions: Vec<Vec<u8>>,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -432,6 +433,7 @@ mod dump_parse_tests {
             packet_models::GetBlocksResponse {
                 id: 228,
                 blocks: vec![vec![1, 2], vec![1, 2]],
+                transactions: vec![vec![1, 2], vec![1, 2]],
             },
         ))
         .serialize(&mut serializer)
