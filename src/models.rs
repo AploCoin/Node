@@ -19,6 +19,7 @@ pub mod packet_models {
         BadAddress,
         BadBlockchainAddress,
         UnexpectedInternalError,
+        UnexpectedResponseId,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
