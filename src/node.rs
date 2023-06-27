@@ -333,7 +333,7 @@ async fn handle_incoming_wrapped(
 ) -> Result<(), NodeError> {
     let mut rx_propagate = context.propagate_packet.subscribe();
 
-    let waiting_response: HashSet<u64> = HashSet::with_capacity(20);
+    let mut waiting_response: HashSet<u64> = HashSet::with_capacity(20);
 
     let mut socket = EncSocket::new_connection(socket, *addr, *PEER_TIMEOUT)
         .await
@@ -363,7 +363,7 @@ async fn handle_incoming_wrapped(
                 }
 
                 propagate_data.packet.set_id(packet_id);
-
+                waiting_response.insert(packet_id);
 
                 socket.send( propagate_data.packet).await.map_err(|e| NodeError::SendPacket(*addr, e))?;
                 continue;
@@ -383,7 +383,7 @@ async fn handle_incoming_wrapped(
         if let Err(e) = process_packet(
             &mut socket,
             &packet,
-            &waiting_response,
+            &mut waiting_response,
             tools::current_time(),
             &context,
         )
@@ -438,7 +438,7 @@ pub async fn handle_peer(addr: &SocketAddr, context: NodeContext) -> Result<(), 
         .await
         .map_err(|e| NodeError::ConnectToPeer(*addr, e))?;
 
-    let waiting_response: HashSet<u64> = HashSet::with_capacity(20);
+    let mut waiting_response: HashSet<u64> = HashSet::with_capacity(20);
 
     // announce
     let id: u64 = rand::random();
@@ -479,6 +479,8 @@ pub async fn handle_peer(addr: &SocketAddr, context: NodeContext) -> Result<(), 
 
                 propagate_data.packet.set_id(packet_id);
 
+                waiting_response.insert(packet_id);
+
                 socket.send(propagate_data.packet).await.map_err(|e| NodeError::SendPacket(*addr, e))?;
                 continue;
             },
@@ -491,7 +493,7 @@ pub async fn handle_peer(addr: &SocketAddr, context: NodeContext) -> Result<(), 
         if let Err(e) = process_packet(
             &mut socket,
             &packet,
-            &waiting_response,
+            &mut waiting_response,
             tools::current_time(),
             &context,
         )
@@ -635,7 +637,7 @@ async fn new_block(
 async fn process_packet(
     socket: &mut EncSocket,
     packet: &packet_models::Packet,
-    waiting_response: &HashSet<u64>,
+    waiting_response: &mut HashSet<u64>,
     recieved_timestamp: u64,
     context: &NodeContext,
 ) -> Result<(), NodeError> {
@@ -1170,7 +1172,10 @@ async fn process_packet(
                     .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
             }
         },
-        packet_models::Packet::Response { id: _, data: r } => match r {
+        packet_models::Packet::Response {
+            id: recieved_id,
+            data: r,
+        } => match r {
             packet_models::Response::Ok(_) => {}
             packet_models::Response::GetNodes(p) => {
                 if let Some(dump) = &p.ipv4 {
@@ -1214,6 +1219,14 @@ async fn process_packet(
             packet_models::Response::Ping(_) => todo!(),
             packet_models::Response::GetBlock(_) => todo!(),
             packet_models::Response::GetBlocks(p) => {
+                if !waiting_response.remove(recieved_id) {
+                    socket
+                        .send(&packet_models::Packet::Error(packet_models::ErrorR {
+                            code: packet_models::ErrorCode::UnexpectedResponseId,
+                        }))
+                        .await
+                        .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
+                }
                 let mut recieved_blocks: Vec<Arc<dyn MainChainBlock + Send + Sync>> =
                     Vec::with_capacity(p.blocks.len());
 
