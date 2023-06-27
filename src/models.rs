@@ -36,6 +36,16 @@ pub mod packet_models {
         Error(ErrorR),
     }
 
+    impl Packet {
+        pub fn set_id(&mut self, new_id: u64) {
+            match self {
+                Packet::Request { id, .. } => *id = new_id,
+                Packet::Response { id, .. } => *id = new_id,
+                Packet::Error(_) => todo!(),
+            }
+        }
+    }
+
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
     #[serde(tag = "q")]
     pub enum Request {
