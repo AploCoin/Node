@@ -230,15 +230,15 @@ pub async fn update_blockchain_wrapped(context: NodeContext) {
                 if let Some(e) = context
                     .propagate_packet
                     .send(PropagatedPacket {
-                        packet: packet_models::Packet::Request(
-                            packet_models::Request::GetBlocksByHeights(
+                        packet: packet_models::Packet::Request {
+                            id: 0,
+                            data: packet_models::Request::GetBlocksByHeights(
                                 packet_models::GetBlocksByHeightsRequest {
-                                    id: 0,
                                     start: height + 1,
                                     amount: MAX_BLOCKS_SYNC_AMOUNT as u64,
                                 },
                             ),
-                        ),
+                        },
                         source_addr: SocketAddr::V4(unsafe {
                             SocketAddrV4::from_str("0.0.0.0:0").unwrap_unchecked()
                         }),
@@ -339,9 +339,10 @@ async fn handle_incoming_wrapped(
         .await
         .map_err(|e| NodeError::ConnectToPeer(*addr, e))?;
 
-    let packet = packet_models::Packet::Request(packet_models::Request::GetNodes(
-        packet_models::GetNodesRequest { id: 0 },
-    ));
+    let packet = packet_models::Packet::Request {
+        id: 0,
+        data: packet_models::Request::GetNodes(packet_models::GetNodesRequest {}),
+    };
     socket
         .send(packet)
         .await
@@ -364,7 +365,7 @@ async fn handle_incoming_wrapped(
             _ = sleep(Duration::from_millis(5000)) => {
                 let packet_id: u64 = rand::random();
                 socket.send(
-                    packet_models::Packet::Request(packet_models::Request::Ping(packet_models::PingRequest{id:packet_id}))).await.map_err(|e| NodeError::SendPacket(*addr, e))?;
+                    packet_models::Packet::Request{id:packet_id,data:packet_models::Request::Ping(packet_models::PingRequest{})}).await.map_err(|e| NodeError::SendPacket(*addr, e))?;
                 continue;
             }
         };
@@ -434,18 +435,20 @@ pub async fn handle_peer(addr: &SocketAddr, context: NodeContext) -> Result<(), 
     let id: u64 = rand::random();
 
     let body = models::addr2bin(&SERVER_ADDRESS);
-    let packet = packet_models::Packet::Request(packet_models::Request::Announce(
-        packet_models::AnnounceRequest { id, addr: body },
-    ));
+    let packet = packet_models::Packet::Request {
+        id,
+        data: packet_models::Request::Announce(packet_models::AnnounceRequest { addr: body }),
+    };
 
     socket
         .send(packet)
         .await
         .map_err(|e| NodeError::SendPacket(*addr, e))?;
 
-    let packet = packet_models::Packet::Request(packet_models::Request::GetNodes(
-        packet_models::GetNodesRequest { id: 0 },
-    ));
+    let packet = packet_models::Packet::Request {
+        id: 0,
+        data: packet_models::Request::GetNodes(packet_models::GetNodesRequest {}),
+    };
     socket
         .send(packet)
         .await
@@ -459,6 +462,14 @@ pub async fn handle_peer(addr: &SocketAddr, context: NodeContext) -> Result<(), 
                 if propagate_data.source_addr == *addr{
                     continue;
                 }
+
+                let mut packet_id: u64 = rand::random();
+                while waiting_response.get(&packet_id).is_some() {
+                    packet_id = rand::random();
+                }
+
+
+
                 socket.send(propagate_data.packet).await.map_err(|e| NodeError::SendPacket(*addr, e))?;
                 continue;
             },
@@ -620,11 +631,15 @@ async fn process_packet(
     context: &NodeContext,
 ) -> Result<(), NodeError> {
     match packet {
-        packet_models::Packet::Request(r) => match r {
-            packet_models::Request::Ping(p) => socket
-                .send(packet_models::Packet::Response(
-                    packet_models::Response::Ping(packet_models::PingResponse { id: p.id }),
-                ))
+        packet_models::Packet::Request {
+            id: recieved_id,
+            data: r,
+        } => match r {
+            packet_models::Request::Ping(_) => socket
+                .send(packet_models::Packet::Response {
+                    id: *recieved_id,
+                    data: packet_models::Response::Ping(packet_models::PingResponse {}),
+                })
                 .await
                 .map_err(|e| NodeError::SendPacket(socket.addr, e))?,
             packet_models::Request::Announce(p) => {
@@ -655,10 +670,11 @@ async fn process_packet(
                         packet_id = rand::random();
                     }
 
-                    let mut request = p.clone();
-                    request.id = packet_id;
-                    let packet =
-                        packet_models::Packet::Request(packet_models::Request::Announce(request));
+                    let request = p.clone();
+                    let packet = packet_models::Packet::Request {
+                        id: packet_id,
+                        data: packet_models::Request::Announce(request),
+                    };
 
                     context
                         .propagate_packet
@@ -714,16 +730,18 @@ async fn process_packet(
                 };
 
                 socket
-                    .send(packet_models::Packet::Response(
-                        packet_models::Response::GetAmount(packet_models::GetAmountResponse {
-                            id: p.id,
-                            amount: funds_dumped,
-                        }),
-                    ))
+                    .send(packet_models::Packet::Response {
+                        id: *recieved_id,
+                        data: packet_models::Response::GetAmount(
+                            packet_models::GetAmountResponse {
+                                amount: funds_dumped,
+                            },
+                        ),
+                    })
                     .await
                     .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
             }
-            packet_models::Request::GetNodes(p) => {
+            packet_models::Request::GetNodes(_) => {
                 let mut peers_cloned: Box<[SocketAddr]>;
                 {
                     // clone peers into vec
@@ -739,13 +757,13 @@ async fn process_packet(
                 // dump ipv4 and ipv6 addresses in u8 vecs separately
                 let (ipv4, ipv6) = dump_addresses(&peers_cloned);
 
-                let packet = packet_models::Packet::Response(packet_models::Response::GetNodes(
-                    packet_models::GetNodesReponse {
-                        id: p.id,
+                let packet = packet_models::Packet::Response {
+                    id: *recieved_id,
+                    data: packet_models::Response::GetNodes(packet_models::GetNodesReponse {
                         ipv4,
                         ipv6,
-                    },
-                ));
+                    }),
+                };
 
                 socket
                     .send(packet)
@@ -753,22 +771,24 @@ async fn process_packet(
                     .map_err(|e| NodeError::SendPacket(socket.addr, e))?
             }
             packet_models::Request::GetTransaction(p) => {
-                let packet = packet_models::Response::GetTransaction(
-                    packet_models::GetTransactionResponse {
-                        id: p.id,
-                        transaction: context
-                            .blockchain
-                            .get_main_chain()
-                            .find_transaction(&p.hash)
-                            .await
-                            .map_err(|e| NodeError::FindTransaction(e.to_string()))?
-                            .map(|tr| {
-                                tr.dump()
-                                    .map_err(|e| NodeError::FindTransaction(e.to_string()))
-                                    .unwrap() // TODO: remove unwrap
-                            }),
-                    },
-                );
+                let packet = packet_models::Packet::Response {
+                    id: *recieved_id,
+                    data: packet_models::Response::GetTransaction(
+                        packet_models::GetTransactionResponse {
+                            transaction: context
+                                .blockchain
+                                .get_main_chain()
+                                .find_transaction(&p.hash)
+                                .await
+                                .map_err(|e| NodeError::FindTransaction(e.to_string()))?
+                                .map(|tr| {
+                                    tr.dump()
+                                        .map_err(|e| NodeError::FindTransaction(e.to_string()))
+                                        .unwrap() // TODO: remove unwrap
+                                }),
+                        },
+                    ),
+                };
 
                 socket
                     .send(packet)
@@ -796,12 +816,12 @@ async fn process_packet(
                 };
 
                 socket
-                    .send(packet_models::Response::GetBlock(
-                        packet_models::GetBlockResponse {
-                            id: p.id,
+                    .send(packet_models::Packet::Response {
+                        id: *recieved_id,
+                        data: packet_models::Response::GetBlock(packet_models::GetBlockResponse {
                             dump: block_dump,
-                        },
-                    ))
+                        }),
+                    })
                     .await
                     .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
             }
@@ -819,12 +839,12 @@ async fn process_packet(
                     Ok(None) => None,
                 };
                 socket
-                    .send(packet_models::Packet::Response(
-                        packet_models::Response::GetBlock(packet_models::GetBlockResponse {
-                            id: p.id,
+                    .send(packet_models::Packet::Response {
+                        id: *recieved_id,
+                        data: packet_models::Response::GetBlock(packet_models::GetBlockResponse {
                             dump: block_dump,
                         }),
-                    ))
+                    })
                     .await
                     .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
             }
@@ -833,13 +853,15 @@ async fn process_packet(
                     return Err(NodeError::TooMuchBlocks(config::MAX_BLOCKS_IN_RESPONSE));
                 } else if p.amount == 0 {
                     socket
-                        .send(packet_models::Packet::Response(
-                            packet_models::Response::GetBlocks(packet_models::GetBlocksResponse {
-                                id: p.id,
-                                blocks: Vec::new(),
-                                transactions: Vec::new(),
-                            }),
-                        ))
+                        .send(packet_models::Packet::Response {
+                            id: *recieved_id,
+                            data: packet_models::Response::GetBlocks(
+                                packet_models::GetBlocksResponse {
+                                    blocks: Vec::new(),
+                                    transactions: Vec::new(),
+                                },
+                            ),
+                        })
                         .await
                         .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
                     return Ok(());
@@ -880,17 +902,19 @@ async fn process_packet(
                 }
 
                 socket
-                    .send(packet_models::Packet::Response(
-                        packet_models::Response::GetBlocks(packet_models::GetBlocksResponse {
-                            id: p.id,
-                            blocks,
-                            transactions,
-                        }),
-                    ))
+                    .send(packet_models::Packet::Response {
+                        id: *recieved_id,
+                        data: packet_models::Response::GetBlocks(
+                            packet_models::GetBlocksResponse {
+                                blocks,
+                                transactions,
+                            },
+                        ),
+                    })
                     .await
                     .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
             }
-            packet_models::Request::GetLastBlock(p) => {
+            packet_models::Request::GetLastBlock(_) => {
                 let block_dump = match context
                     .blockchain
                     .get_main_chain()
@@ -905,12 +929,12 @@ async fn process_packet(
                 };
 
                 socket
-                    .send(packet_models::Packet::Response(
-                        packet_models::Response::GetBlock(packet_models::GetBlockResponse {
-                            id: p.id,
+                    .send(packet_models::Packet::Response {
+                        id: *recieved_id,
+                        data: packet_models::Response::GetBlock(packet_models::GetBlockResponse {
                             dump: block_dump,
                         }),
-                    ))
+                    })
                     .await
                     .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
             }
@@ -976,10 +1000,11 @@ async fn process_packet(
                     packet_id = rand::random();
                 }
 
-                let mut request = p.clone();
-                request.id = packet_id;
-                let packet =
-                    packet_models::Packet::Request(packet_models::Request::NewTransaction(request));
+                let request = p.clone();
+                let packet = packet_models::Packet::Request {
+                    id: packet_id,
+                    data: packet_models::Request::NewTransaction(request),
+                };
 
                 context
                     .propagate_packet
@@ -990,9 +1015,10 @@ async fn process_packet(
                     .map_err(|e| NodeError::PropagationSend(socket.addr, e.to_string()))?;
 
                 socket
-                    .send(packet_models::Response::Ok(packet_models::OkResponse {
-                        id: p.id,
-                    }))
+                    .send(packet_models::Packet::Response {
+                        id: *recieved_id,
+                        data: packet_models::Response::Ok(packet_models::OkResponse {}),
+                    })
                     .await
                     .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
             }
@@ -1026,11 +1052,6 @@ async fn process_packet(
                 //     .new_block(new_block.clone(), &socket.addr, recieved_timestamp as usize)
                 //     .await;
 
-                let mut packet_id: u64 = rand::random();
-                while waiting_response.get(&packet_id).is_some() {
-                    packet_id = rand::random();
-                }
-
                 let block_transaction_hashes = new_block.get_transactions();
                 let mut dumped_transactions: Vec<u8> = Vec::with_capacity(0);
                 let main_chain = context.blockchain.get_main_chain();
@@ -1060,9 +1081,14 @@ async fn process_packet(
                     dumped_transactions.extend(dump.iter());
                 }
 
-                let block_packet = packet_models::Packet::Request(
-                    packet_models::Request::NewBlock(packet_models::NewBlockRequest {
-                        id: packet_id,
+                let mut packet_id: u64 = rand::random();
+                while waiting_response.get(&packet_id).is_some() {
+                    packet_id = rand::random();
+                }
+
+                let block_packet = packet_models::Packet::Request {
+                    id: packet_id,
+                    data: packet_models::Request::NewBlock(packet_models::NewBlockRequest {
                         dump: new_block
                             .dump()
                             .map_err(|e| {
@@ -1072,7 +1098,7 @@ async fn process_packet(
                             .unwrap(),
                         transactions: dumped_transactions,
                     }),
-                );
+                };
                 context
                     .propagate_packet
                     .send(PropagatedPacket {
@@ -1081,12 +1107,12 @@ async fn process_packet(
                     })
                     .map_err(|e| NodeError::PropagationSend(socket.addr, e.to_string()))?;
 
-                let response_packet = packet_models::Packet::Response(
-                    packet_models::Response::SubmitPow(packet_models::SubmitPowResponse {
-                        id: p.id,
+                let response_packet = packet_models::Packet::Response {
+                    id: *recieved_id,
+                    data: packet_models::Response::SubmitPow(packet_models::SubmitPowResponse {
                         accepted: true,
                     }),
-                );
+                };
 
                 socket
                     .send(response_packet)
@@ -1110,13 +1136,13 @@ async fn process_packet(
                     packet_id = rand::random();
                 }
 
-                let block_packet = packet_models::Packet::Request(
-                    packet_models::Request::NewBlock(packet_models::NewBlockRequest {
-                        id: packet_id,
+                let block_packet = packet_models::Packet::Request {
+                    id: packet_id,
+                    data: packet_models::Request::NewBlock(packet_models::NewBlockRequest {
                         dump: p.dump.to_owned(),
                         transactions: p.transactions.to_owned(),
                     }),
-                );
+                };
 
                 context
                     .propagate_packet
@@ -1127,14 +1153,15 @@ async fn process_packet(
                     .map_err(|e| NodeError::PropagationSend(socket.addr, e.to_string()))?;
 
                 socket
-                    .send(&packet_models::Packet::Response(
-                        packet_models::Response::Ok(packet_models::OkResponse { id: p.id }),
-                    ))
+                    .send(&packet_models::Packet::Response {
+                        id: *recieved_id,
+                        data: packet_models::Response::Ok(packet_models::OkResponse {}),
+                    })
                     .await
                     .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
             }
         },
-        packet_models::Packet::Response(r) => match r {
+        packet_models::Packet::Response { id: _, data: r } => match r {
             packet_models::Response::Ok(_) => {}
             packet_models::Response::GetNodes(p) => {
                 if let Some(dump) = &p.ipv4 {
