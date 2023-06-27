@@ -352,10 +352,19 @@ async fn handle_incoming_wrapped(
     loop {
         let packet = tokio::select! {
             propagate_message = rx_propagate.recv() => {
-                let propagate_data = propagate_message.map_err(|e| NodeError::PropagationRead(*addr, e))?;
+                let mut propagate_data = propagate_message.map_err(|e| NodeError::PropagationRead(*addr, e))?;
                 if propagate_data.source_addr == *addr{
                     continue;
                 }
+
+                let mut packet_id: u64 = rand::random();
+                while waiting_response.get(&packet_id).is_some() {
+                    packet_id = rand::random();
+                }
+
+                propagate_data.packet.set_id(packet_id);
+
+
                 socket.send( propagate_data.packet).await.map_err(|e| NodeError::SendPacket(*addr, e))?;
                 continue;
             },
@@ -458,7 +467,7 @@ pub async fn handle_peer(addr: &SocketAddr, context: NodeContext) -> Result<(), 
     loop {
         let packet = tokio::select! {
             propagate_message = rx_propagate.recv() => {
-                let propagate_data = propagate_message.map_err(|e| NodeError::PropagationRead(*addr, e))?;
+                let mut propagate_data = propagate_message.map_err(|e| NodeError::PropagationRead(*addr, e))?;
                 if propagate_data.source_addr == *addr{
                     continue;
                 }
@@ -468,7 +477,7 @@ pub async fn handle_peer(addr: &SocketAddr, context: NodeContext) -> Result<(), 
                     packet_id = rand::random();
                 }
 
-
+                propagate_data.packet.set_id(packet_id);
 
                 socket.send(propagate_data.packet).await.map_err(|e| NodeError::SendPacket(*addr, e))?;
                 continue;
