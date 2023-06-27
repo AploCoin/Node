@@ -1165,7 +1165,7 @@ async fn process_packet(
             packet_models::Response::Ok(_) => {}
             packet_models::Response::GetNodes(p) => {
                 if let Some(dump) = &p.ipv4 {
-                    let parsed = parse_ipv4(&dump).map_err(NodeError::BinToAddress)?;
+                    let parsed = parse_ipv4(dump).map_err(NodeError::BinToAddress)?;
                     for addr in parsed {
                         if (addr.ip().is_loopback() && addr.port() == SERVER_ADDRESS.port())
                             || addr.ip().is_unspecified()
@@ -1183,7 +1183,7 @@ async fn process_packet(
                 }
 
                 if let Some(dump) = &p.ipv6 {
-                    let parsed = parse_ipv4(&dump).map_err(NodeError::BinToAddress)?;
+                    let parsed = parse_ipv4(dump).map_err(NodeError::BinToAddress)?;
                     for addr in parsed {
                         if (addr.ip().is_loopback() && addr.port() == SERVER_ADDRESS.port())
                             || addr.ip().is_unspecified()
