@@ -347,6 +347,7 @@ async fn handle_incoming_wrapped(
         .send(packet)
         .await
         .map_err(|e| NodeError::SendPacket(*addr, e))?;
+    waiting_response.insert(0);
 
     // main loop
     loop {
@@ -365,7 +366,7 @@ async fn handle_incoming_wrapped(
                 propagate_data.packet.set_id(packet_id);
                 waiting_response.insert(packet_id);
 
-                socket.send( propagate_data.packet).await.map_err(|e| NodeError::SendPacket(*addr, e))?;
+                socket.send(propagate_data.packet).await.map_err(|e| NodeError::SendPacket(*addr, e))?;
                 continue;
             },
             packet = socket.recv::<packet_models::Packet>() => {
@@ -375,6 +376,7 @@ async fn handle_incoming_wrapped(
                 let packet_id: u64 = rand::random();
                 socket.send(
                     packet_models::Packet::Request{id:packet_id,data:packet_models::Request::Ping(packet_models::PingRequest{})}).await.map_err(|e| NodeError::SendPacket(*addr, e))?;
+                waiting_response.insert(packet_id);
                 continue;
             }
         };
@@ -1175,83 +1177,86 @@ async fn process_packet(
         packet_models::Packet::Response {
             id: recieved_id,
             data: r,
-        } => match r {
-            packet_models::Response::Ok(_) => {}
-            packet_models::Response::GetNodes(p) => {
-                if let Some(dump) = &p.ipv4 {
-                    let parsed = parse_ipv4(dump).map_err(NodeError::BinToAddress)?;
-                    for addr in parsed {
-                        if (addr.ip().is_loopback() && addr.port() == SERVER_ADDRESS.port())
-                            || addr.ip().is_unspecified()
-                        {
-                            continue;
+        } => {
+            if !waiting_response.remove(recieved_id) {
+                socket
+                    .send(&packet_models::Packet::Error(packet_models::ErrorR {
+                        code: packet_models::ErrorCode::UnexpectedResponseId,
+                    }))
+                    .await
+                    .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
+            }
+            match r {
+                packet_models::Response::Ok(_) => {}
+                packet_models::Response::GetNodes(p) => {
+                    if let Some(dump) = &p.ipv4 {
+                        let parsed = parse_ipv4(dump).map_err(NodeError::BinToAddress)?;
+                        for addr in parsed {
+                            if (addr.ip().is_loopback() && addr.port() == SERVER_ADDRESS.port())
+                                || addr.ip().is_unspecified()
+                                || addr.eq(&SERVER_ADDRESS)
+                            {
+                                continue;
+                            }
+                            if !context.peers.write().await.insert(addr) {
+                                continue;
+                            };
+                            context
+                                .new_peers_tx
+                                .send(addr)
+                                .map_err(|e| NodeError::PropagationSend(addr, e.to_string()))?;
                         }
-                        if !context.peers.write().await.insert(addr) {
-                            continue;
-                        };
-                        context
-                            .new_peers_tx
-                            .send(addr)
-                            .map_err(|e| NodeError::PropagationSend(addr, e.to_string()))?;
+                    }
+
+                    if let Some(dump) = &p.ipv6 {
+                        let parsed = parse_ipv4(dump).map_err(NodeError::BinToAddress)?;
+                        for addr in parsed {
+                            if (addr.ip().is_loopback() && addr.port() == SERVER_ADDRESS.port())
+                                || addr.ip().is_unspecified()
+                            {
+                                continue;
+                            }
+                            if !context.peers.write().await.insert(addr) {
+                                continue;
+                            };
+                            context
+                                .new_peers_tx
+                                .send(addr)
+                                .map_err(|e| NodeError::PropagationSend(addr, e.to_string()))?;
+                        }
                     }
                 }
+                packet_models::Response::GetAmount(_) => todo!(),
+                packet_models::Response::GetTransaction(_) => todo!(),
+                packet_models::Response::Ping(_) => {}
+                packet_models::Response::GetBlock(_) => todo!(),
+                packet_models::Response::GetBlocks(p) => {
+                    let mut recieved_blocks: Vec<Arc<dyn MainChainBlock + Send + Sync>> =
+                        Vec::with_capacity(p.blocks.len());
 
-                if let Some(dump) = &p.ipv6 {
-                    let parsed = parse_ipv4(dump).map_err(NodeError::BinToAddress)?;
-                    for addr in parsed {
-                        if (addr.ip().is_loopback() && addr.port() == SERVER_ADDRESS.port())
-                            || addr.ip().is_unspecified()
-                        {
-                            continue;
-                        }
-                        if !context.peers.write().await.insert(addr) {
-                            continue;
-                        };
-                        context
-                            .new_peers_tx
-                            .send(addr)
-                            .map_err(|e| NodeError::PropagationSend(addr, e.to_string()))?;
+                    for block in p.blocks.iter().map(|dump| {
+                        block::deserialize_main_chain_block(dump)
+                            .map_err(|e| NodeError::ParseBlock(e.to_string()))
+                    }) {
+                        recieved_blocks.push(block?);
+                    }
+
+                    for (block, transactions_dumped) in
+                        recieved_blocks.into_iter().zip(p.transactions.iter())
+                    {
+                        new_block(
+                            block,
+                            transactions_dumped,
+                            context,
+                            socket,
+                            recieved_timestamp,
+                        )
+                        .await?;
                     }
                 }
+                packet_models::Response::SubmitPow(_) => todo!(),
             }
-            packet_models::Response::GetAmount(_) => todo!(),
-            packet_models::Response::GetTransaction(_) => todo!(),
-            packet_models::Response::Ping(_) => todo!(),
-            packet_models::Response::GetBlock(_) => todo!(),
-            packet_models::Response::GetBlocks(p) => {
-                if !waiting_response.remove(recieved_id) {
-                    socket
-                        .send(&packet_models::Packet::Error(packet_models::ErrorR {
-                            code: packet_models::ErrorCode::UnexpectedResponseId,
-                        }))
-                        .await
-                        .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
-                }
-                let mut recieved_blocks: Vec<Arc<dyn MainChainBlock + Send + Sync>> =
-                    Vec::with_capacity(p.blocks.len());
-
-                for block in p.blocks.iter().map(|dump| {
-                    block::deserialize_main_chain_block(dump)
-                        .map_err(|e| NodeError::ParseBlock(e.to_string()))
-                }) {
-                    recieved_blocks.push(block?);
-                }
-
-                for (block, transactions_dumped) in
-                    recieved_blocks.into_iter().zip(p.transactions.iter())
-                {
-                    new_block(
-                        block,
-                        transactions_dumped,
-                        context,
-                        socket,
-                        recieved_timestamp,
-                    )
-                    .await?;
-                }
-            }
-            packet_models::Response::SubmitPow(_) => todo!(),
-        },
+        }
         packet_models::Packet::Error(e) => {
             //error!("Node: {:?} returned error: {:?}", socket.addr, e);
             return Err(NodeError::RemoteNode(e.clone()));

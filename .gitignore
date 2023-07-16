@@ -19,3 +19,4 @@ peers.dump
 logs/
 BlockChainTree/
 .env
+.vscode/

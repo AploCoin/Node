@@ -364,7 +364,43 @@ pub fn parse_ipv6(data: &[u8]) -> Result<Vec<SocketAddr>, AddressError> {
 
 #[cfg(test)]
 mod dump_parse_tests {
-    //use super::*;
+    use super::*;
+
+    #[test]
+    fn create_submit_pow_request() {
+        let mut buf: Vec<u8> = Vec::new();
+        let mut serializer = rmp_serde::Serializer::new(&mut buf);
+
+        packet_models::Packet::Request {
+            id: 228,
+            data: packet_models::Request::SubmitPow(packet_models::SubmitPow {
+                pow: vec![0, 0, 0, 0],
+                address: vec![2, 2, 2, 2],
+                timestamp: 566,
+            }),
+        }
+        .serialize(&mut serializer)
+        .unwrap();
+
+        println!("{:X?}", buf);
+    }
+
+    #[test]
+    fn create_get_block_response() {
+        let mut buf: Vec<u8> = Vec::new();
+        let mut serializer = rmp_serde::Serializer::new(&mut buf);
+
+        packet_models::Packet::Response {
+            id: 228,
+            data: packet_models::Response::GetBlock(packet_models::GetBlockResponse {
+                dump: Some(vec![1, 2, 3, 4, 5]),
+            }),
+        }
+        .serialize(&mut serializer)
+        .unwrap();
+
+        println!("{:X?}", buf);
+    }
 
     // #[test]
     // fn create_ping_packet() {

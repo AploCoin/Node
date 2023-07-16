@@ -66,6 +66,7 @@ impl EncSocket {
         nonce
     }
 
+    /// Recieve new connection as a server
     pub async fn new_connection(
         mut socket: TcpStream,
         addr: SocketAddr,
@@ -99,6 +100,7 @@ impl EncSocket {
         })
     }
 
+    /// Establish new connection as a client
     pub async fn establish_new_connection(
         mut socket: TcpStream,
         addr: SocketAddr,
