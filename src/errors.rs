@@ -105,7 +105,7 @@ pub mod node_errors {
         TooMuchBlocks(usize),
 
         #[error("Chain hasn't yet reached that height")]
-        NotReachedHeight(usize),
+        _NotReachedHeight(usize),
 
         #[error("The submitted timestamp is bigger, than the actual time {0:?} > {1:?}")]
         TimestampInFuture(u64, u64),

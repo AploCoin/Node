@@ -131,8 +131,8 @@ impl NewData {
 
     /// Remove all block intries, including transactions and approves
     pub fn remove_blocks(&mut self, height: u64) {
-        let blocks = match self.new_blocks.get(&height) {
-            Some(block) => block,
+        let blocks = match self.new_blocks.remove(&height) {
+            Some(blocks) => blocks,
             None => {
                 return;
             }
@@ -885,7 +885,19 @@ async fn process_packet(
                 let chain = context.blockchain.get_main_chain();
                 let height = chain.get_height().await;
                 if height <= p.start {
-                    return Err(NodeError::NotReachedHeight(p.start as usize));
+                    socket
+                        .send(packet_models::Packet::Response {
+                            id: *recieved_id,
+                            data: packet_models::Response::GetBlocks(
+                                packet_models::GetBlocksResponse {
+                                    blocks: Vec::with_capacity(0),
+                                    transactions: Vec::with_capacity(0),
+                                },
+                            ),
+                        })
+                        .await
+                        .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
+                    return Ok(());
                 }
 
                 let amount = if p.start + p.amount > height {
