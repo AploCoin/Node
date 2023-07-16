@@ -964,7 +964,7 @@ async fn process_packet(
                         for tr_hash in block.get_transactions().iter() {
                             let tr = chain.find_transaction_raw(tr_hash).await.unwrap().unwrap(); // critical error
 
-                            trs_to_add.extend_from_slice(&tr.len().to_be_bytes());
+                            trs_to_add.extend_from_slice(&(tr.len() as u32).to_be_bytes());
                         }
                         transactions.push(trs_to_add);
                         blocks.push(block.dump().unwrap());
