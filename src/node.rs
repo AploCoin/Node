@@ -424,7 +424,9 @@ pub async fn connect_to_peer(addr: SocketAddr, context: NodeContext) {
 
     let mut rx = context.shutdown.subscribe();
     tokio::select! {
-        _ = rx.recv() => {},
+        _ = rx.recv() => {
+            return;
+        },
         ret = handle_peer(
             &addr,
             context
