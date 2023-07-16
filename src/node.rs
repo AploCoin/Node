@@ -455,6 +455,7 @@ pub async fn handle_peer(addr: &SocketAddr, context: NodeContext) -> Result<(), 
         .send(packet)
         .await
         .map_err(|e| NodeError::SendPacket(*addr, e))?;
+    waiting_response.insert(id);
 
     let packet = packet_models::Packet::Request {
         id: 0,
@@ -464,6 +465,7 @@ pub async fn handle_peer(addr: &SocketAddr, context: NodeContext) -> Result<(), 
         .send(packet)
         .await
         .map_err(|e| NodeError::SendPacket(*addr, e))?;
+    waiting_response.insert(0);
 
     // main loop
     loop {
