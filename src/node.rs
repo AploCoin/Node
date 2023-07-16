@@ -188,7 +188,7 @@ pub async fn update_blockchain_wrapped(context: NodeContext) {
                     id: 0,
                     data: packet_models::Request::GetBlocksByHeights(
                         packet_models::GetBlocksByHeightsRequest {
-                            start: height + 1,
+                            start: height,
                             amount: MAX_BLOCKS_SYNC_AMOUNT as u64,
                         },
                     ),
@@ -1299,6 +1299,35 @@ async fn process_packet(
                             .map_err(|e| NodeError::ParseBlock(e.to_string()))
                     }) {
                         recieved_blocks.push(block?);
+                    }
+
+                    if recieved_blocks.len() > 0 {
+                        debug!("Propagating a packet to get new blocks");
+                        if let Some(e) = context
+                            .propagate_packet
+                            .send(PropagatedPacket {
+                                packet: packet_models::Packet::Request {
+                                    id: 0,
+                                    data: packet_models::Request::GetBlocksByHeights(
+                                        packet_models::GetBlocksByHeightsRequest {
+                                            start: unsafe {
+                                                recieved_blocks.last().unwrap_unchecked()
+                                            }
+                                            .get_info()
+                                            .height
+                                                + 1,
+                                            amount: MAX_BLOCKS_SYNC_AMOUNT as u64,
+                                        },
+                                    ),
+                                },
+                                source_addr: SocketAddr::V4(unsafe {
+                                    SocketAddrV4::from_str("0.0.0.0:0").unwrap_unchecked()
+                                }),
+                            })
+                            .err()
+                        {
+                            error!("Error propagating packet {:?}", e);
+                        }
                     }
 
                     for (block, transactions_dumped) in
