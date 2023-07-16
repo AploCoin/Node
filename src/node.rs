@@ -178,6 +178,30 @@ pub async fn update_blockchain_wrapped(context: NodeContext) {
     loop {
         sleep(Duration::from_secs(MIN_BLOCK_APPROVE_TIME as u64)).await;
         info!("Updating blockchain");
+
+        debug!("Propagating a packet to get new blocks");
+        let height = context.blockchain.get_main_chain().get_height().await;
+        if let Some(e) = context
+            .propagate_packet
+            .send(PropagatedPacket {
+                packet: packet_models::Packet::Request {
+                    id: 0,
+                    data: packet_models::Request::GetBlocksByHeights(
+                        packet_models::GetBlocksByHeightsRequest {
+                            start: height + 1,
+                            amount: MAX_BLOCKS_SYNC_AMOUNT as u64,
+                        },
+                    ),
+                },
+                source_addr: SocketAddr::V4(unsafe {
+                    SocketAddrV4::from_str("0.0.0.0:0").unwrap_unchecked()
+                }),
+            })
+            .err()
+        {
+            error!("Error propagating packet {:?}", e);
+        }
+
         {
             let mut new_data = context.new_data.write().await;
             let mut max_height: u64 = 0;
