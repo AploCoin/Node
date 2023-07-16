@@ -107,6 +107,9 @@ pub mod node_errors {
         #[error("Chain hasn't yet reached that height")]
         _NotReachedHeight(usize),
 
+        #[error("Same Peer tried to add same block")]
+        SamePeerSameBlock,
+
         #[error("The submitted timestamp is bigger, than the actual time {0:?} > {1:?}")]
         TimestampInFuture(u64, u64),
 
