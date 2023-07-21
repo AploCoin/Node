@@ -1,13 +1,18 @@
-use crate::errors::*;
-use crate::models::{dump_addresses, parse_ipv4, parse_ipv6, peers_dump};
+use crate::config::MIN_BLOCK_APPROVE_TIME;
+use crate::encsocket::EncSocket;
+use crate::errors::node_errors::NodeError;
+use crate::models::{dump_addresses, parse_ipv4, parse_ipv6, peers_dump, NodeContext};
+use crate::{config, errors::*};
+use blockchaintree::block::MainChainBlock;
 use blockchaintree::transaction::{Transaction, Transactionable};
 use rmp_serde::{Deserializer, Serializer};
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::Cursor;
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
@@ -130,20 +135,142 @@ pub fn deserialize_transactions(data: &[u8]) -> Result<Vec<Transaction>, node_er
     Ok(transactions)
 }
 
-// pub fn serialize_transactions(transactions:&[Transaction]) -> Result<Vec<u8>, node_errors::NodeError>{
-//     let mut size = 0usize;
-//     for transaction in transactions{
-//         size += transaction.get_dump_size()+4;
-//     }
-//     let mut to_return = Vec::with_capacity(size);
+/// Adds a new block to either blockchain or a NewData
+///
+/// returns true if that's in fact a new block
+///
+/// returns false, if the block already existed at some point, somewhere
+pub async fn new_block(
+    recieved_block: Arc<dyn MainChainBlock + Send + Sync>,
+    transaction_dumps: &[u8],
+    context: &NodeContext,
+    socket: &mut EncSocket,
+    recieved_timestamp: u64,
+) -> Result<bool, NodeError> {
+    let transactions = deserialize_transactions(transaction_dumps)?;
 
-//     for transaction in transactions{
-//         let dump = transaction.dump().map_err(|e| )
-//         to_return.pus
-//     }
+    let mut new_data = context.new_data.write().await;
 
-//     Ok(to_return)
-// }
+    if !context
+        .blockchain
+        .new_main_chain_block(&recieved_block)
+        .await
+        .map_err(|e| NodeError::AddMainChainBlock(e.to_string()))?
+    {
+        // diverging data
+        // get already existing block from the chain
+        let existing_block = context
+            .blockchain
+            .get_main_chain()
+            .find_by_height(recieved_block.get_info().height)
+            .await
+            .map_err(|e| NodeError::GetBlock(e.to_string()))?
+            .ok_or(NodeError::GetBlock(
+                "Couldn't find block with same height".into(),
+            ))?;
+
+        let main_chain = context.blockchain.get_main_chain();
+
+        let mut transactions: Vec<Transaction> =
+            Vec::with_capacity(existing_block.get_transactions().len());
+        for tr_hash in existing_block.get_transactions().iter() {
+            let transaction = main_chain
+                .find_transaction(tr_hash)
+                .await
+                .map_err(|e| NodeError::FindTransaction(e.to_string()))?
+                .ok_or(NodeError::FindTransaction(format!(
+                    "Transaction with hash {tr_hash:?} not found"
+                )))?;
+            transactions.push(transaction);
+        }
+
+        // add block from the chain to the new data
+        if new_data
+            .new_block(
+                existing_block,
+                &transactions,
+                &SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0),
+                recieved_timestamp as usize,
+            )
+            .await
+            .is_err()
+        {
+            return Ok(false);
+        };
+    }
+
+    if let Ok(new) = new_data
+        .new_block(
+            recieved_block.clone(),
+            &transactions,
+            &socket.addr,
+            recieved_timestamp as usize,
+        )
+        .await
+    {
+        if !new {
+            // block was already in new data
+            let mut blocks_same_height =
+                new_data.get_blocks_same_height(recieved_block.get_info().height);
+
+            // sort ascending with approves
+            blocks_same_height.sort_by(|a, b| {
+                let a_approves = new_data.get_block_approves(&a.hash().unwrap()).unwrap(); // critical section, stop app if error
+                let b_approves = new_data.get_block_approves(&b.hash().unwrap()).unwrap(); // critical section, stop app if error
+
+                match a_approves.total_approves.cmp(&b_approves.total_approves) {
+                    Ordering::Greater => Ordering::Greater,
+                    Ordering::Less => Ordering::Less,
+                    Ordering::Equal => a_approves.last_recieved.cmp(&b_approves.last_recieved), // compare timestamps
+                }
+            });
+
+            let max_block = blocks_same_height.last().unwrap(); // critical error
+            match blocks_same_height.len() {
+                1 => {
+                    let approves = new_data
+                        .get_block_approves(&max_block.hash().unwrap())
+                        .unwrap(); // critical error
+                    if current_time() as usize - approves.last_recieved
+                        >= config::MIN_BLOCK_APPROVE_TIME
+                    {
+                        context
+                            .blockchain
+                            .overwrite_main_chain_block(&recieved_block, &transactions)
+                            .await
+                            .map_err(|e| NodeError::AddMainChainBlock(e.to_string()))?;
+                    }
+                }
+                _ => {
+                    let next_block = unsafe { blocks_same_height.get_unchecked(1) };
+                    let max_block_approves = new_data
+                        .get_block_approves(&max_block.hash().unwrap())
+                        .unwrap(); // critical error
+                    let next_block_approves = new_data
+                        .get_block_approves(&next_block.hash().unwrap())
+                        .unwrap(); // critical error
+
+                    if max_block_approves.total_approves >= next_block_approves.total_approves * 2
+                        || current_time() as usize - max_block_approves.last_recieved
+                            > MIN_BLOCK_APPROVE_TIME
+                    {
+                        context
+                            .blockchain
+                            .overwrite_main_chain_block(max_block, &transactions)
+                            .await
+                            .map_err(|e| NodeError::AddMainChainBlock(e.to_string()))?;
+
+                        new_data.clear();
+                    }
+                }
+            }
+        }
+    } else {
+        return Ok(false);
+    }
+
+    Ok(true)
+}
 
 #[cfg(test)]
 mod dump_parse_tests {

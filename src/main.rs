@@ -5,6 +5,8 @@ mod node;
 mod tools;
 mod config;
 mod encsocket;
+mod handlers;
+mod newdata;
 
 use blockchaintree::blockchaintree::BlockChainTree;
 use std::collections::HashSet;
@@ -18,7 +20,7 @@ use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info};
 use tracing_subscriber::{fmt, layer::SubscriberExt, EnvFilter};
 
-use crate::node::PropagatedPacket;
+use crate::models::{NodeContext, PropagatedPacket};
 
 #[tokio::main]
 async fn main() -> errors::ResultSmall<()> {
@@ -87,7 +89,7 @@ async fn main() -> errors::ResultSmall<()> {
     debug!("Blockchain loaded");
 
     debug!("Creating node context");
-    let context = node::NodeContext {
+    let context = NodeContext {
         peers: peers.clone(),
         shutdown: tx,
         propagate_packet: txp,

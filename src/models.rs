@@ -2,12 +2,31 @@ use crate::errors::{models_errors::AddressError, *};
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
-// #[repr(u8)]
-// #[derive(Clone)]
-// pub enum NodeCommand {
-//     Stop,
-//     Subscribed,
-// }
+use std::collections::HashSet;
+
+use crate::newdata::*;
+
+use blockchaintree::blockchaintree::BlockChainTree;
+
+use std::sync::Arc;
+
+use tokio::sync::{broadcast::Sender, RwLock};
+
+#[derive(Clone, Debug)]
+pub struct PropagatedPacket {
+    pub packet: packet_models::Packet,
+    pub source_addr: SocketAddr,
+}
+
+#[derive(Clone)]
+pub struct NodeContext {
+    pub peers: Arc<RwLock<HashSet<SocketAddr>>>,
+    pub shutdown: Sender<u8>,
+    pub propagate_packet: Sender<PropagatedPacket>,
+    pub new_peers_tx: Sender<SocketAddr>,
+    pub blockchain: Arc<BlockChainTree>,
+    pub new_data: Arc<RwLock<NewData>>,
+}
 
 pub mod packet_models {
     use super::*;

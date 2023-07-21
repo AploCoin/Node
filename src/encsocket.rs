@@ -110,15 +110,15 @@ impl EncSocket {
         let secret = EphemeralSecret::new(OsRng);
         let public = PublicKey::from(&secret);
 
-        tokio::time::timeout(timeout, socket.read_exact(&mut buf))
-            .await
-            .map_err(|_| EncSocketError::Timeout)?
-            .map_err(EncSocketError::ReadSocket)?;
-
         socket
             .write(public.as_bytes())
             .await
             .map_err(EncSocketError::WriteSocket)?;
+
+        tokio::time::timeout(timeout, socket.read_exact(&mut buf))
+            .await
+            .map_err(|_| EncSocketError::Timeout)?
+            .map_err(EncSocketError::ReadSocket)?;
 
         let other_public = PublicKey::from(buf);
         let shared = secret.diffie_hellman(&other_public);

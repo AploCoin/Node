@@ -1,177 +1,28 @@
 #![allow(arithmetic_overflow)]
-use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::collections::HashSet;
+use std::net::{SocketAddr, SocketAddrV4};
 use std::str::FromStr;
 
-use crate::config;
 use crate::config::*;
 use crate::encsocket::EncSocket;
 use crate::errors::node_errors::NodeError;
 use crate::errors::*;
+use crate::handlers::*;
 use crate::models;
 use crate::models::*;
+use crate::newdata::*;
 use crate::tools;
-use blockchaintree::block::{self, MainChainBlock, MainChainBlockArc};
-use blockchaintree::blockchaintree::BlockChainTree;
-use blockchaintree::transaction::{Transaction, Transactionable};
+use blockchaintree::block::MainChainBlock;
 use lazy_static::lazy_static;
-use num_bigint::BigUint;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{
-    broadcast::{Receiver, Sender},
-    RwLock,
-};
+use tokio::sync::broadcast::Receiver;
 use tokio::time::{sleep, Duration};
 #[allow(unused_imports)]
 use tracing::{debug, error, info};
 
 lazy_static! {
     static ref PEER_TIMEOUT: Duration = Duration::from_secs(15);
-}
-
-#[derive(Clone)]
-pub struct Approves {
-    pub total_approves: usize,
-    pub peers: HashSet<SocketAddr>,
-    pub last_recieved: usize,
-}
-
-/// Holds new data passed to the node until several verifications
-#[derive(Clone, Default)]
-pub struct NewData {
-    pub new_blocks: HashMap<u64, Vec<MainChainBlockArc>>,
-    pub blocks_approves: HashMap<[u8; 32], Approves>,
-    pub transactions: HashMap<[u8; 32], Vec<Transaction>>,
-}
-
-// impl Default for NewData {
-//     fn default() -> Self {
-//         Self {
-//             new_blocks: Default::default(),
-//             blocks_approves: Default::default(),
-//             transactions: Default::default(),
-//         }
-//     }
-// }
-
-impl NewData {
-    // pub fn new() -> NewData {
-    //     Default::default()
-    // }
-
-    /// Adds new block to the data
-    ///
-    /// if the block already exists increases amount of approves and returns false
-    pub async fn new_block(
-        &mut self,
-        block: MainChainBlockArc,
-        transactions: &[Transaction],
-        peer: &SocketAddr,
-        time_recieved: usize,
-    ) -> Result<bool, NodeError> {
-        //let mut blocks_approves = self.blocks_approves.write().await;
-
-        //let mut new_blocks = self.new_blocks.write().await;
-
-        let block_hash = block
-            .hash()
-            .map_err(|e| {
-                error!("Failed to hash newly created block: {}", e.to_string());
-                e
-            })
-            .unwrap(); // smth went horribly wrong, it's safer to crash
-
-        let mut existed = true;
-        let mut same_peer = false;
-        self.blocks_approves
-            .entry(block_hash)
-            .and_modify(|approves| {
-                if approves.peers.insert(*peer) {
-                    approves.total_approves += 1;
-                    approves.last_recieved = time_recieved;
-                } else {
-                    same_peer = true
-                }
-            })
-            .or_insert_with(|| {
-                debug!("The block with hash: {:?} didn't exist", block_hash);
-                existed = false;
-                Approves {
-                    total_approves: 1,
-                    peers: HashSet::from([*peer]),
-                    last_recieved: time_recieved,
-                }
-            });
-
-        if same_peer {
-            return Err(NodeError::SamePeerSameBlock);
-        }
-        if existed {
-            return Ok(false);
-        }
-
-        self.new_blocks
-            .entry(block.get_info().height)
-            .and_modify(|blocks| blocks.push(block.clone()))
-            .or_insert(vec![block]);
-
-        self.transactions
-            .insert(block_hash, transactions.to_owned());
-
-        Ok(true)
-    }
-
-    pub fn get_blocks_same_height(&self, height: u64) -> Vec<MainChainBlockArc> {
-        if let Some(blocks) = self.new_blocks.get(&height) {
-            blocks.to_vec()
-        } else {
-            Vec::with_capacity(0)
-        }
-    }
-
-    pub fn get_block_approves(&self, hash: &[u8; 32]) -> Option<&Approves> {
-        self.blocks_approves.get(hash)
-    }
-
-    /// Remove all block intries, including transactions and approves
-    pub fn remove_blocks(&mut self, height: u64) {
-        let blocks = match self.new_blocks.remove(&height) {
-            Some(blocks) => blocks,
-            None => {
-                return;
-            }
-        };
-        for block in blocks {
-            let hash = block.hash().unwrap();
-            self.blocks_approves.remove(&hash);
-            for tr in block.get_transactions().iter() {
-                self.transactions.remove(tr);
-            }
-        }
-    }
-
-    pub fn clear(&mut self) {
-        self.blocks_approves.clear();
-        self.new_blocks.clear();
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct PropagatedPacket {
-    packet: packet_models::Packet,
-    source_addr: SocketAddr,
-}
-
-#[derive(Clone)]
-pub struct NodeContext {
-    pub peers: Arc<RwLock<HashSet<SocketAddr>>>,
-    pub shutdown: Sender<u8>,
-    pub propagate_packet: Sender<PropagatedPacket>,
-    pub new_peers_tx: Sender<SocketAddr>,
-    pub blockchain: Arc<BlockChainTree>,
-    pub new_data: Arc<RwLock<NewData>>,
 }
 
 pub async fn update_blockchain_wrapped(context: NodeContext) {
@@ -342,10 +193,6 @@ async fn handle_incoming(
             socket,
             &addr,
             context) => {
-            // context.propagate_packet,
-            // context.peers,
-            // context.new_peers_tx,
-            // context.blockchain) => {
                 if let Err(e) = res { error!("Unexpected error on peer {}: {:?}", addr, e) }},
         _ = rx.recv() => {
 
@@ -546,143 +393,6 @@ pub async fn handle_peer(addr: &SocketAddr, context: NodeContext) -> Result<(), 
     Ok(())
 }
 
-/// Adds a new block to either blockchain or a NewData
-///
-/// returns true if that's in fact a new block
-///
-/// returns false, if the block already existed at some point, somewhere
-async fn new_block(
-    recieved_block: Arc<dyn MainChainBlock + Send + Sync>,
-    transaction_dumps: &[u8],
-    context: &NodeContext,
-    socket: &mut EncSocket,
-    recieved_timestamp: u64,
-) -> Result<bool, NodeError> {
-    let transactions = tools::deserialize_transactions(transaction_dumps)?;
-
-    let mut new_data = context.new_data.write().await;
-
-    if !context
-        .blockchain
-        .new_main_chain_block(&recieved_block)
-        .await
-        .map_err(|e| NodeError::AddMainChainBlock(e.to_string()))?
-    {
-        // diverging data
-        // get already existing block from the chain
-        let existing_block = context
-            .blockchain
-            .get_main_chain()
-            .find_by_height(recieved_block.get_info().height)
-            .await
-            .map_err(|e| NodeError::GetBlock(e.to_string()))?
-            .ok_or(NodeError::GetBlock(
-                "Couldn't find block with same height".into(),
-            ))?;
-
-        let main_chain = context.blockchain.get_main_chain();
-
-        let mut transactions: Vec<Transaction> =
-            Vec::with_capacity(existing_block.get_transactions().len());
-        for tr_hash in existing_block.get_transactions().iter() {
-            let transaction = main_chain
-                .find_transaction(tr_hash)
-                .await
-                .map_err(|e| NodeError::FindTransaction(e.to_string()))?
-                .ok_or(NodeError::FindTransaction(format!(
-                    "Transaction with hash {tr_hash:?} not found"
-                )))?;
-            transactions.push(transaction);
-        }
-
-        // add block from the chain to the new data
-        if new_data
-            .new_block(
-                existing_block,
-                &transactions,
-                &SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0),
-                recieved_timestamp as usize,
-            )
-            .await
-            .is_err()
-        {
-            return Ok(false);
-        };
-    }
-
-    if let Ok(new) = new_data
-        .new_block(
-            recieved_block.clone(),
-            &transactions,
-            &socket.addr,
-            recieved_timestamp as usize,
-        )
-        .await
-    {
-        if !new {
-            // block was already in new data
-            let mut blocks_same_height =
-                new_data.get_blocks_same_height(recieved_block.get_info().height);
-
-            // sort ascending with approves
-            blocks_same_height.sort_by(|a, b| {
-                let a_approves = new_data.get_block_approves(&a.hash().unwrap()).unwrap(); // critical section, stop app if error
-                let b_approves = new_data.get_block_approves(&b.hash().unwrap()).unwrap(); // critical section, stop app if error
-
-                match a_approves.total_approves.cmp(&b_approves.total_approves) {
-                    Ordering::Greater => Ordering::Greater,
-                    Ordering::Less => Ordering::Less,
-                    Ordering::Equal => a_approves.last_recieved.cmp(&b_approves.last_recieved), // compare timestamps
-                }
-            });
-
-            let max_block = blocks_same_height.last().unwrap(); // critical error
-            match blocks_same_height.len() {
-                1 => {
-                    let approves = new_data
-                        .get_block_approves(&max_block.hash().unwrap())
-                        .unwrap(); // critical error
-                    if tools::current_time() as usize - approves.last_recieved
-                        >= config::MIN_BLOCK_APPROVE_TIME
-                    {
-                        context
-                            .blockchain
-                            .overwrite_main_chain_block(&recieved_block, &transactions)
-                            .await
-                            .map_err(|e| NodeError::AddMainChainBlock(e.to_string()))?;
-                    }
-                }
-                _ => {
-                    let next_block = unsafe { blocks_same_height.get_unchecked(1) };
-                    let max_block_approves = new_data
-                        .get_block_approves(&max_block.hash().unwrap())
-                        .unwrap(); // critical error
-                    let next_block_approves = new_data
-                        .get_block_approves(&next_block.hash().unwrap())
-                        .unwrap(); // critical error
-
-                    if max_block_approves.total_approves >= next_block_approves.total_approves * 2
-                        || tools::current_time() as usize - max_block_approves.last_recieved
-                            > MIN_BLOCK_APPROVE_TIME
-                    {
-                        context
-                            .blockchain
-                            .overwrite_main_chain_block(max_block, &transactions)
-                            .await
-                            .map_err(|e| NodeError::AddMainChainBlock(e.to_string()))?;
-
-                        new_data.clear();
-                    }
-                }
-            }
-        }
-    } else {
-        return Ok(false);
-    }
-
-    Ok(true)
-}
-
 async fn process_packet(
     socket: &mut EncSocket,
     packet: &packet_models::Packet,
@@ -703,535 +413,61 @@ async fn process_packet(
                 .await
                 .map_err(|e| NodeError::SendPacket(socket.addr, e))?,
             packet_models::Request::Announce(p) => {
-                let addr = bin2addr(&p.addr).map_err(NodeError::BinToAddress)?;
-
-                // verify address is not loopback
-                if (addr.ip().is_loopback() && addr.port() == SERVER_ADDRESS.port())
-                    || addr.ip().is_unspecified()
-                {
-                    let response_packet = packet_models::Packet::Error(packet_models::ErrorR {
-                        code: packet_models::ErrorCode::BadAddress,
-                    });
-                    socket
-                        .send(response_packet)
-                        .await
-                        .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
-
-                    return Ok(());
-                }
-
-                let mut peers = context.peers.write().await;
-                let peer_doesnt_exist = peers.insert(addr);
-                drop(peers);
-
-                if peer_doesnt_exist {
-                    let mut packet_id: u64 = rand::random();
-                    while waiting_response.get(&packet_id).is_some() {
-                        packet_id = rand::random();
-                    }
-
-                    let request = p.clone();
-                    let packet = packet_models::Packet::Request {
-                        id: packet_id,
-                        data: packet_models::Request::Announce(request),
-                    };
-
-                    context
-                        .propagate_packet
-                        .send(PropagatedPacket {
-                            packet,
-                            source_addr: socket.addr,
-                        })
-                        .map_err(|e| NodeError::PropagationSend(addr, e.to_string()))?;
-                    context
-                        .new_peers_tx
-                        .send(addr)
-                        .map_err(|e| NodeError::PropagationSend(addr, e.to_string()))?;
-                }
+                announce_request_handler(context, waiting_response, socket, p).await?;
             }
             packet_models::Request::GetAmount(p) => {
-                if p.address.len() != 33 {
-                    socket
-                        .send(packet_models::Packet::Error(packet_models::ErrorR {
-                            code: packet_models::ErrorCode::BadBlockchainAddress,
-                        }))
-                        .await
-                        .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
-                    return Err(NodeError::BadBlockchainAddressSize(p.address.len()));
-                }
-
-                let address: [u8; 33] =
-                    unsafe { p.to_owned().address.try_into().unwrap_unchecked() };
-
-                let funds = match context.blockchain.get_funds(&address).await {
-                    Err(e) => {
-                        socket
-                            .send(packet_models::Packet::Error(packet_models::ErrorR {
-                                code: packet_models::ErrorCode::UnexpectedInternalError,
-                            }))
-                            .await
-                            .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
-
-                        return Err(NodeError::GetFunds(e.to_string()));
-                    }
-                    Ok(funds) => funds,
-                };
-
-                let mut funds_dumped: Vec<u8> = Vec::new();
-                if let Err(e) = blockchaintree::tools::dump_biguint(&funds, &mut funds_dumped) {
-                    socket
-                        .send(packet_models::Packet::Error(packet_models::ErrorR {
-                            code: packet_models::ErrorCode::UnexpectedInternalError,
-                        }))
-                        .await
-                        .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
-
-                    return Err(NodeError::GetFunds(e.to_string()));
-                };
-
-                socket
-                    .send(packet_models::Packet::Response {
-                        id: *recieved_id,
-                        data: packet_models::Response::GetAmount(
-                            packet_models::GetAmountResponse {
-                                amount: funds_dumped,
-                            },
-                        ),
-                    })
-                    .await
-                    .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
+                get_amount_request_handler(context, socket, p, *recieved_id).await?;
             }
             packet_models::Request::GetNodes(_) => {
-                let mut peers_cloned: Box<[SocketAddr]>;
-                {
-                    // clone peers into vec
-                    let peers = context.peers.read().await;
-                    peers_cloned = vec![*SERVER_ADDRESS; peers.len()].into_boxed_slice();
-                    for (index, peer) in peers.iter().enumerate() {
-                        let cell = unsafe { peers_cloned.get_unchecked_mut(index) };
-                        *cell = *peer;
-                    }
-                    drop(peers);
-                }
-
-                // dump ipv4 and ipv6 addresses in u8 vecs separately
-                let (ipv4, ipv6) = dump_addresses(&peers_cloned);
-
-                let packet = packet_models::Packet::Response {
-                    id: *recieved_id,
-                    data: packet_models::Response::GetNodes(packet_models::GetNodesReponse {
-                        ipv4,
-                        ipv6,
-                    }),
-                };
-
-                socket
-                    .send(packet)
-                    .await
-                    .map_err(|e| NodeError::SendPacket(socket.addr, e))?
+                get_nodes_request_handler(context, socket, *recieved_id).await?;
             }
             packet_models::Request::GetTransaction(p) => {
-                let packet = packet_models::Packet::Response {
-                    id: *recieved_id,
-                    data: packet_models::Response::GetTransaction(
-                        packet_models::GetTransactionResponse {
-                            transaction: context
-                                .blockchain
-                                .get_main_chain()
-                                .find_transaction(&p.hash)
-                                .await
-                                .map_err(|e| NodeError::FindTransaction(e.to_string()))?
-                                .map(|tr| {
-                                    tr.dump()
-                                        .map_err(|e| NodeError::FindTransaction(e.to_string()))
-                                        .unwrap() // TODO: remove unwrap
-                                }),
-                        },
-                    ),
-                };
-
-                socket
-                    .send(packet)
-                    .await
-                    .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
+                get_transaction_request_handler(context, socket, *recieved_id, p).await?;
             }
             packet_models::Request::GetBlockByHash(p) => {
-                let block_dump = match context
-                    .blockchain
-                    .get_main_chain()
-                    .find_raw_by_hash(&p.hash)
-                    .await
-                {
-                    Err(e) => {
-                        // socket
-                        //     .send(packet_models::ErrorR {
-                        //         code: packet_models::ErrorCode::UnexpectedInternalError,
-                        //     })
-                        //     .await
-                        //     .map_err(|e| NodeError::SendPacketError(socket.addr, e))?;
-                        return Err(NodeError::GetBlock(e.to_string()));
-                    }
-                    Ok(Some(block)) => Some(block),
-                    Ok(None) => None,
-                };
-
-                socket
-                    .send(packet_models::Packet::Response {
-                        id: *recieved_id,
-                        data: packet_models::Response::GetBlock(packet_models::GetBlockResponse {
-                            dump: block_dump,
-                        }),
-                    })
-                    .await
-                    .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
+                get_block_by_hash_request_handler(context, socket, *recieved_id, p).await?;
             }
             packet_models::Request::GetBlockByHeight(p) => {
-                let block_dump = match context
-                    .blockchain
-                    .get_main_chain()
-                    .find_raw_by_height(p.height)
-                    .await
-                {
-                    Err(e) => {
-                        return Err(NodeError::GetBlock(e.to_string()));
-                    }
-                    Ok(Some(block)) => Some(block),
-                    Ok(None) => None,
-                };
-                socket
-                    .send(packet_models::Packet::Response {
-                        id: *recieved_id,
-                        data: packet_models::Response::GetBlock(packet_models::GetBlockResponse {
-                            dump: block_dump,
-                        }),
-                    })
-                    .await
-                    .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
+                get_block_by_height_request_handler(context, socket, *recieved_id, p).await?;
             }
             packet_models::Request::GetBlocksByHeights(p) => {
-                if p.amount as usize > config::MAX_BLOCKS_IN_RESPONSE {
-                    return Err(NodeError::TooMuchBlocks(config::MAX_BLOCKS_IN_RESPONSE));
-                } else if p.amount == 0 {
-                    socket
-                        .send(packet_models::Packet::Response {
-                            id: *recieved_id,
-                            data: packet_models::Response::GetBlocks(
-                                packet_models::GetBlocksResponse {
-                                    blocks: Vec::new(),
-                                    transactions: Vec::new(),
-                                },
-                            ),
-                        })
-                        .await
-                        .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
-                    return Ok(());
-                }
-
-                let chain = context.blockchain.get_main_chain();
-                let height = chain.get_height().await;
-                if height <= p.start {
-                    socket
-                        .send(packet_models::Packet::Response {
-                            id: *recieved_id,
-                            data: packet_models::Response::GetBlocks(
-                                packet_models::GetBlocksResponse {
-                                    blocks: Vec::with_capacity(0),
-                                    transactions: Vec::with_capacity(0),
-                                },
-                            ),
-                        })
-                        .await
-                        .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
-                    return Ok(());
-                }
-
-                let amount = if p.start + p.amount > height {
-                    height - p.start
-                } else {
-                    p.amount
-                };
-
-                let mut blocks: Vec<Vec<u8>> = Vec::with_capacity(amount as usize);
-                let mut transactions: Vec<Vec<u8>> = Vec::with_capacity(amount as usize);
-
-                for height in p.start..p.start + amount {
-                    if let Some(block) = chain
-                        .find_by_height(height)
-                        .await
-                        .map_err(|e| NodeError::GetBlock(e.to_string()))?
-                    {
-                        let mut trs_to_add: Vec<u8> = Vec::new();
-                        for tr_hash in block.get_transactions().iter() {
-                            let tr = chain.find_transaction_raw(tr_hash).await.unwrap().unwrap(); // critical error
-
-                            trs_to_add.extend_from_slice(&(tr.len() as u32).to_be_bytes());
-                            trs_to_add.extend(tr.into_iter());
-                        }
-                        transactions.push(trs_to_add);
-                        blocks.push(block.dump().unwrap());
-                    } else {
-                        break;
-                    }
-                }
-
-                socket
-                    .send(packet_models::Packet::Response {
-                        id: *recieved_id,
-                        data: packet_models::Response::GetBlocks(
-                            packet_models::GetBlocksResponse {
-                                blocks,
-                                transactions,
-                            },
-                        ),
-                    })
-                    .await
-                    .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
+                get_blocks_by_height(context, socket, *recieved_id, p).await?;
             }
             packet_models::Request::GetLastBlock(_) => {
-                let block_dump = match context
-                    .blockchain
-                    .get_main_chain()
-                    .get_last_raw_block()
-                    .await
-                {
-                    Err(e) => {
-                        return Err(NodeError::GetBlock(e.to_string()));
-                    }
-                    Ok(Some(block)) => Some(block),
-                    Ok(None) => None,
-                };
-
-                socket
-                    .send(packet_models::Packet::Response {
-                        id: *recieved_id,
-                        data: packet_models::Response::GetBlock(packet_models::GetBlockResponse {
-                            dump: block_dump,
-                        }),
-                    })
-                    .await
-                    .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
+                get_last_block_request_handler(context, socket, *recieved_id).await?;
             }
             packet_models::Request::NewTransaction(p) => {
-                if p.transaction.len() < 4 {
-                    return Err(NodeError::BadTransactionSize);
-                }
-                let transaction_size: u32 = u32::from_be_bytes(unsafe {
-                    p.transaction[0..4].try_into().unwrap_unchecked()
-                });
-                if p.transaction.len() - 4 != transaction_size as usize {
-                    return Err(NodeError::BadTransactionSize);
-                }
-
-                let transaction = blockchaintree::transaction::Transaction::parse(
-                    &p.transaction[4..],
-                    transaction_size as u64,
-                )
-                .map_err(|e| NodeError::ParseTransaction(e.to_string()))?;
-
-                // check if the transaction is with root as source
-                if transaction
-                    .get_sender()
-                    .eq(&blockchaintree::blockchaintree::ROOT_PUBLIC_ADDRESS)
-                {
-                    return Err(NodeError::SendFundsFromRoot);
-                }
-
-                // verify transaction
-                let last_block = context
-                    .blockchain
-                    .get_main_chain()
-                    .get_last_block()
-                    .await
-                    .map_err(|e| NodeError::CreateTransaction(e.to_string()))?;
-
-                if let Some(last_block) = last_block {
-                    let transaction_time = transaction.get_timestamp();
-                    if transaction_time <= last_block.get_info().timestamp
-                        || transaction_time > recieved_timestamp
-                    {
-                        return Err(NodeError::CreateTransaction(
-                            "Wrong transaction time".into(),
-                        ));
-                    }
-                }
-
-                if !transaction
-                    .verify()
-                    .map_err(|e| NodeError::CreateTransaction(e.to_string()))?
-                {
-                    return Err(NodeError::CreateTransaction("Bad signature".into()));
-                }
-
-                context
-                    .blockchain
-                    .new_transaction(transaction)
-                    .await
-                    .map_err(|e| NodeError::CreateTransaction(e.to_string()))?;
-
-                let mut packet_id: u64 = rand::random();
-                while waiting_response.get(&packet_id).is_some() {
-                    packet_id = rand::random();
-                }
-
-                let request = p.clone();
-                let packet = packet_models::Packet::Request {
-                    id: packet_id,
-                    data: packet_models::Request::NewTransaction(request),
-                };
-
-                context
-                    .propagate_packet
-                    .send(PropagatedPacket {
-                        packet,
-                        source_addr: socket.addr,
-                    })
-                    .map_err(|e| NodeError::PropagationSend(socket.addr, e.to_string()))?;
-
-                socket
-                    .send(packet_models::Packet::Response {
-                        id: *recieved_id,
-                        data: packet_models::Response::Ok(packet_models::OkResponse {}),
-                    })
-                    .await
-                    .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
-            }
-            packet_models::Request::SubmitPow(p) => {
-                if p.address.len() != 33 {
-                    return Err(NodeError::WrongAddressSize(p.address.len()));
-                }
-                if p.timestamp > recieved_timestamp {
-                    return Err(NodeError::TimestampInFuture(
-                        p.timestamp,
-                        recieved_timestamp,
-                    ));
-                } else if recieved_timestamp - p.timestamp > MAX_POW_SUBMIT_DELAY {
-                    return Err(NodeError::TimestampExpired);
-                }
-                let pow = BigUint::from_bytes_be(&p.pow);
-
-                // cannot fail
-                let address: [u8; 33] = unsafe { p.address.clone().try_into().unwrap_unchecked() };
-
-                let new_block = context
-                    .blockchain
-                    .emit_main_chain_block(pow, address, p.timestamp)
-                    .await
-                    .map_err(|e| NodeError::EmitMainChainBlock(e.to_string()))?;
-
-                // context
-                //     .new_data
-                //     .write()
-                //     .await
-                //     .new_block(new_block.clone(), &socket.addr, recieved_timestamp as usize)
-                //     .await;
-
-                let block_transaction_hashes = new_block.get_transactions();
-                let mut dumped_transactions: Vec<u8> = Vec::with_capacity(0);
-                let main_chain = context.blockchain.get_main_chain();
-                for transaction_hash in block_transaction_hashes.iter() {
-                    let dump = main_chain
-                        .find_transaction_raw(transaction_hash)
-                        .await
-                        .map_err(|e| {
-                            error!(
-                                "Error finding transaction {:?}, error: {:?}",
-                                transaction_hash, e
-                            );
-                        })
-                        .unwrap()
-                        .ok_or_else(|| {
-                            error!(
-                                "Error finding transaction {:?}, fatal error",
-                                transaction_hash
-                            );
-                            NodeError::FindTransaction("No such transaction in db".into())
-                        })
-                        .unwrap();
-
-                    dumped_transactions.reserve(4 + dump.len());
-
-                    dumped_transactions.extend((dump.len() as u32).to_be_bytes());
-                    dumped_transactions.extend(dump.iter());
-                }
-
-                let mut packet_id: u64 = rand::random();
-                while waiting_response.get(&packet_id).is_some() {
-                    packet_id = rand::random();
-                }
-
-                let block_packet = packet_models::Packet::Request {
-                    id: packet_id,
-                    data: packet_models::Request::NewBlock(packet_models::NewBlockRequest {
-                        dump: new_block
-                            .dump()
-                            .map_err(|e| {
-                                error!("Error dumping new block, fatal error");
-                                e
-                            })
-                            .unwrap(),
-                        transactions: dumped_transactions,
-                    }),
-                };
-                context
-                    .propagate_packet
-                    .send(PropagatedPacket {
-                        packet: block_packet,
-                        source_addr: socket.addr,
-                    })
-                    .map_err(|e| NodeError::PropagationSend(socket.addr, e.to_string()))?;
-
-                let response_packet = packet_models::Packet::Response {
-                    id: *recieved_id,
-                    data: packet_models::Response::SubmitPow(packet_models::SubmitPowResponse {
-                        accepted: true,
-                    }),
-                };
-
-                socket
-                    .send(response_packet)
-                    .await
-                    .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
-            }
-            packet_models::Request::NewBlock(p) => {
-                let recieved_block = block::deserialize_main_chain_block(&p.dump)
-                    .map_err(|e| NodeError::ParseBlock(e.to_string()))?;
-                if new_block(
-                    recieved_block,
-                    &p.transactions,
+                new_transaction_request_handler(
                     context,
                     socket,
+                    *recieved_id,
                     recieved_timestamp,
+                    waiting_response,
+                    p,
                 )
-                .await?
-                {
-                    let mut packet_id: u64 = rand::random();
-                    while waiting_response.get(&packet_id).is_some() {
-                        packet_id = rand::random();
-                    }
-
-                    let block_packet = packet_models::Packet::Request {
-                        id: packet_id,
-                        data: packet_models::Request::NewBlock(packet_models::NewBlockRequest {
-                            dump: p.dump.to_owned(),
-                            transactions: p.transactions.to_owned(),
-                        }),
-                    };
-
-                    context
-                        .propagate_packet
-                        .send(PropagatedPacket {
-                            packet: block_packet,
-                            source_addr: socket.addr,
-                        })
-                        .map_err(|e| NodeError::PropagationSend(socket.addr, e.to_string()))?;
-                }
-                socket
-                    .send(&packet_models::Packet::Response {
-                        id: *recieved_id,
-                        data: packet_models::Response::Ok(packet_models::OkResponse {}),
-                    })
-                    .await
-                    .map_err(|e| NodeError::SendPacket(socket.addr, e))?;
+                .await?;
+            }
+            packet_models::Request::SubmitPow(p) => {
+                submit_pow_request_handler(
+                    context,
+                    socket,
+                    *recieved_id,
+                    recieved_timestamp,
+                    waiting_response,
+                    p,
+                )
+                .await?;
+            }
+            packet_models::Request::NewBlock(p) => {
+                new_block_request_handler(
+                    context,
+                    socket,
+                    *recieved_id,
+                    recieved_timestamp,
+                    waiting_response,
+                    p,
+                )
+                .await?;
             }
         },
         packet_models::Packet::Response {
@@ -1249,99 +485,14 @@ async fn process_packet(
             match r {
                 packet_models::Response::Ok(_) => {}
                 packet_models::Response::GetNodes(p) => {
-                    if let Some(dump) = &p.ipv4 {
-                        let parsed = parse_ipv4(dump).map_err(NodeError::BinToAddress)?;
-                        for addr in parsed {
-                            if (addr.ip().is_loopback() && addr.port() == SERVER_ADDRESS.port())
-                                || addr.ip().is_unspecified()
-                                || addr.eq(&SERVER_ADDRESS)
-                            {
-                                continue;
-                            }
-                            if !context.peers.write().await.insert(addr) {
-                                continue;
-                            };
-                            context
-                                .new_peers_tx
-                                .send(addr)
-                                .map_err(|e| NodeError::PropagationSend(addr, e.to_string()))?;
-                        }
-                    }
-
-                    if let Some(dump) = &p.ipv6 {
-                        let parsed = parse_ipv4(dump).map_err(NodeError::BinToAddress)?;
-                        for addr in parsed {
-                            if (addr.ip().is_loopback() && addr.port() == SERVER_ADDRESS.port())
-                                || addr.ip().is_unspecified()
-                            {
-                                continue;
-                            }
-                            if !context.peers.write().await.insert(addr) {
-                                continue;
-                            };
-                            context
-                                .new_peers_tx
-                                .send(addr)
-                                .map_err(|e| NodeError::PropagationSend(addr, e.to_string()))?;
-                        }
-                    }
+                    get_nodes_response_handler(context, p).await?;
                 }
                 packet_models::Response::GetAmount(_) => todo!(),
                 packet_models::Response::GetTransaction(_) => todo!(),
                 packet_models::Response::Ping(_) => {}
                 packet_models::Response::GetBlock(_) => todo!(),
                 packet_models::Response::GetBlocks(p) => {
-                    let mut recieved_blocks: Vec<Arc<dyn MainChainBlock + Send + Sync>> =
-                        Vec::with_capacity(p.blocks.len());
-
-                    for block in p.blocks.iter().map(|dump| {
-                        block::deserialize_main_chain_block(dump)
-                            .map_err(|e| NodeError::ParseBlock(e.to_string()))
-                    }) {
-                        recieved_blocks.push(block?);
-                    }
-
-                    if recieved_blocks.len() > 0 {
-                        debug!("Propagating a packet to get new blocks");
-                        if let Some(e) = context
-                            .propagate_packet
-                            .send(PropagatedPacket {
-                                packet: packet_models::Packet::Request {
-                                    id: 0,
-                                    data: packet_models::Request::GetBlocksByHeights(
-                                        packet_models::GetBlocksByHeightsRequest {
-                                            start: unsafe {
-                                                recieved_blocks.last().unwrap_unchecked()
-                                            }
-                                            .get_info()
-                                            .height
-                                                + 1,
-                                            amount: MAX_BLOCKS_SYNC_AMOUNT as u64,
-                                        },
-                                    ),
-                                },
-                                source_addr: SocketAddr::V4(unsafe {
-                                    SocketAddrV4::from_str("0.0.0.0:0").unwrap_unchecked()
-                                }),
-                            })
-                            .err()
-                        {
-                            error!("Error propagating packet {:?}", e);
-                        }
-                    }
-
-                    for (block, transactions_dumped) in
-                        recieved_blocks.into_iter().zip(p.transactions.iter())
-                    {
-                        new_block(
-                            block,
-                            transactions_dumped,
-                            context,
-                            socket,
-                            recieved_timestamp,
-                        )
-                        .await?;
-                    }
+                    get_blocks_response_handler(context, socket, recieved_timestamp, p).await?;
                 }
                 packet_models::Response::SubmitPow(_) => todo!(),
             }
