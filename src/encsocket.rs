@@ -13,10 +13,11 @@ use std::net::SocketAddr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::Duration;
+//use tracing::debug;
 use x25519_dalek::{EphemeralSecret, PublicKey};
 
 static MAX_PACKET_SIZE: usize = 5242880; // size in bytes
-static BUFFER_RECV_SIZE: usize = 262144;
+static BUFFER_RECV_SIZE: usize = 4096;
 
 pub struct EncSocket {
     socket: TcpStream,
@@ -149,12 +150,13 @@ impl EncSocket {
         EncSocket::establish_new_connection(stream, addr, timeout).await
     }
 
-    pub async fn read_exact(&mut self, buffer: &mut [u8]) -> Result<(), EncSocketError> {
+    pub async fn read_exact(&mut self, buffer: &mut [u8]) -> Result<usize, EncSocketError> {
         let mut received_size = 0;
+        let mut total_read = 0;
         while received_size < buffer.len() {
             let left = buffer.len() - received_size;
             if left < BUFFER_RECV_SIZE {
-                tokio::time::timeout(
+                total_read += tokio::time::timeout(
                     self.timeout,
                     self.socket.read_exact(&mut buffer[received_size..]),
                 )
@@ -163,7 +165,7 @@ impl EncSocket {
                 .map_err(EncSocketError::ReadSocket)?;
                 break;
             }
-            tokio::time::timeout(
+            total_read += tokio::time::timeout(
                 self.timeout,
                 self.socket
                     .read_exact(&mut buffer[received_size..received_size + BUFFER_RECV_SIZE]),
@@ -174,7 +176,7 @@ impl EncSocket {
 
             received_size += BUFFER_RECV_SIZE;
         }
-        Ok(())
+        Ok(total_read)
     }
 
     pub async fn recv_raw(&mut self) -> Result<(usize, Vec<u8>), EncSocketError> {

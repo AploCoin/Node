@@ -40,7 +40,7 @@ pub async fn update_blockchain_wrapped(context: NodeContext) {
                     data: packet_models::Request::GetBlocksByHeights(
                         packet_models::GetBlocksByHeightsRequest {
                             start: height,
-                            amount: MAX_BLOCKS_SYNC_AMOUNT as u64,
+                            amount: 1 as u64, //MAX_BLOCKS_SYNC_AMOUNT as u64,
                         },
                     ),
                 },
@@ -249,11 +249,11 @@ async fn handle_incoming_wrapped(
             packet = socket.recv::<packet_models::Packet>() => {
                 packet.map_err(|e| NodeError::ReceievePacket(*addr, e))?
             },
-            _ = sleep(Duration::from_millis(5000)) => {
-                let packet_id: u64 = rand::random();
+            _ = sleep(Duration::from_millis(10000)) => {
+                //let packet_id: u64 = rand::random();
                 socket.send(
-                    packet_models::Packet::Request{id:packet_id,data:packet_models::Request::Ping(packet_models::PingRequest{})}).await.map_err(|e| NodeError::SendPacket(*addr, e))?;
-                waiting_response.insert(packet_id);
+                    packet_models::Packet::Request{id:1,data:packet_models::Request::Ping(packet_models::PingRequest{})}).await.map_err(|e| NodeError::SendPacket(*addr, e))?;
+                waiting_response.insert(1);
                 continue;
             }
         };
@@ -324,7 +324,7 @@ pub async fn handle_peer(addr: &SocketAddr, context: NodeContext) -> Result<(), 
     // announce
     let id: u64 = rand::random();
 
-    let body = models::addr2bin(&SERVER_ADDRESS);
+    let body = models::addr2bin(&ANNOUNCE_ADDRESS);
     let packet = packet_models::Packet::Request {
         id,
         data: packet_models::Request::Announce(packet_models::AnnounceRequest { addr: body }),

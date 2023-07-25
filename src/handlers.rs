@@ -10,7 +10,7 @@ use blockchaintree::{
     transaction::Transactionable,
 };
 use num_bigint::BigUint;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 use crate::{
     config::{self, MAX_BLOCKS_SYNC_AMOUNT, MAX_POW_SUBMIT_DELAY, SERVER_ADDRESS},
@@ -39,6 +39,7 @@ pub async fn announce_request_handler(
     // verify address is not loopback
     if (addr.ip().is_loopback() && addr.port() == SERVER_ADDRESS.port())
         || addr.ip().is_unspecified()
+        || addr.eq(&SERVER_ADDRESS)
     {
         let response_packet = packet_models::Packet::Error(packet_models::ErrorR {
             code: packet_models::ErrorCode::BadAddress,
@@ -629,6 +630,7 @@ pub async fn get_nodes_response_handler(
                 || addr.ip().is_unspecified()
                 || addr.eq(&SERVER_ADDRESS)
             {
+                warn!("A bad address was supplied: {:?}", addr);
                 continue;
             }
             if !context.peers.write().await.insert(addr) {
