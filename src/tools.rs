@@ -282,10 +282,40 @@ mod dump_parse_tests {
     async fn dump_peers_test() {
         let mut peers: HashSet<SocketAddr> = HashSet::new();
 
+        // peers.insert(SocketAddr::new(
+        //     std::net::IpAddr::V4(Ipv4Addr::new(109, 248, 61, 27)),
+        //     5050,
+        // ));
+
         peers.insert(SocketAddr::new(
-            std::net::IpAddr::V4(Ipv4Addr::new(192, 168, 1, 213)),
+            std::net::IpAddr::V4(Ipv4Addr::new(213, 160, 170, 230)),
             5050,
         ));
+
+        // peers.insert(SocketAddr::new(
+        //     std::net::IpAddr::V4(Ipv4Addr::new(92, 63, 189, 56)),
+        //     5050,
+        // ));
+
+        // peers.insert(SocketAddr::new(
+        //     std::net::IpAddr::V4(Ipv4Addr::new(109, 248, 61, 27)),
+        //     5050,
+        // ));
+
+        // peers.insert(SocketAddr::new(
+        //     std::net::IpAddr::V4(Ipv4Addr::new(172, 16, 111, 181)),
+        //     5050,
+        // ));
+
+        peers.insert(SocketAddr::new(
+            std::net::IpAddr::V4(Ipv4Addr::new(192, 168, 1, 57)),
+            5050,
+        ));
+
+        // peers.insert(SocketAddr::new(
+        //     std::net::IpAddr::V4(Ipv4Addr::new(185, 154, 192, 59)),
+        //     5050,
+        // ));
 
         dump_peers(Arc::new(RwLock::new(peers))).await.unwrap()
     }

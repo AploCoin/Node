@@ -3,6 +3,7 @@ use chacha20::cipher::KeyIvInit;
 use chacha20::cipher::StreamCipher;
 use chacha20::cipher::StreamCipherSeek;
 use chacha20::ChaCha20;
+use core::fmt::Debug;
 use rand_core::OsRng;
 use rmp_serde::{Deserializer, Serializer};
 use serde::{Deserialize, Serialize};
@@ -11,19 +12,23 @@ use std::io::prelude::*;
 use std::io::Cursor;
 use std::net::SocketAddr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::tcp::OwnedReadHalf;
+use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::TcpStream;
 use tokio::time::Duration;
-//use tracing::debug;
+use tracing::debug;
 use x25519_dalek::{EphemeralSecret, PublicKey};
 
 static MAX_PACKET_SIZE: usize = 5242880; // size in bytes
-static BUFFER_RECV_SIZE: usize = 4096;
+static BUFFER_RECV_SIZE: usize = 1024;
 
 pub struct EncSocket {
     socket: TcpStream,
     cipher: ChaCha20,
     pub addr: SocketAddr,
     timeout: Duration,
+    shared_key: [u8; 32],
+    nonce: [u8; 12],
 }
 
 impl EncSocket {
@@ -33,12 +38,16 @@ impl EncSocket {
         cipher: ChaCha20,
         addr: SocketAddr,
         timeout: Duration,
+        shared_key: [u8; 32],
+        nonce: [u8; 12],
     ) -> EncSocket {
         EncSocket {
             socket,
             cipher,
             addr,
             timeout,
+            shared_key,
+            nonce,
         }
     }
 
@@ -88,16 +97,18 @@ impl EncSocket {
             .map_err(EncSocketError::ReadSocket)?;
 
         let other_public = PublicKey::from(buf);
-        let shared = secret.diffie_hellman(&other_public);
-        let nonce = EncSocket::generate_nonce(shared.as_bytes());
+        let shared = secret.diffie_hellman(&other_public).to_bytes();
+        let nonce = EncSocket::generate_nonce(&shared);
 
-        let cipher = ChaCha20::new(shared.as_bytes().into(), &nonce.into());
+        let cipher = ChaCha20::new((&shared).into(), &nonce.into());
 
         Ok(EncSocket {
             socket,
             cipher,
             addr,
             timeout,
+            shared_key: shared,
+            nonce: nonce,
         })
     }
 
@@ -122,16 +133,18 @@ impl EncSocket {
             .map_err(EncSocketError::ReadSocket)?;
 
         let other_public = PublicKey::from(buf);
-        let shared = secret.diffie_hellman(&other_public);
-        let nonce = EncSocket::generate_nonce(shared.as_bytes());
+        let shared = secret.diffie_hellman(&other_public).to_bytes();
+        let nonce = EncSocket::generate_nonce(&shared);
 
-        let cipher = ChaCha20::new(shared.as_bytes().into(), &nonce.into());
+        let cipher = ChaCha20::new((&shared).into(), &nonce.into());
 
         Ok(EncSocket {
             socket,
             cipher,
             addr,
             timeout,
+            shared_key: shared,
+            nonce: nonce,
         })
     }
 
@@ -187,6 +200,11 @@ impl EncSocket {
 
         let packet_size = u32::from_be_bytes(recv_buffer) as usize;
 
+        debug!(
+            "Received packet from the peer: {:?} | size: {:?}",
+            self.addr, packet_size
+        );
+
         if packet_size > MAX_PACKET_SIZE {
             return Err(EncSocketError::TooBigPacket(packet_size));
         }
@@ -241,11 +259,150 @@ impl EncSocket {
         .map_err(EncSocketError::Deserialize)
     }
 
-    pub async fn send<PT: Serialize>(&mut self, packet: PT) -> Result<(), EncSocketError> {
+    pub async fn send<PT: Serialize + Debug>(&mut self, packet: PT) -> Result<(), EncSocketError> {
+        debug!("Sending {:?} to {:?}", packet, self.addr);
         let mut buf: Vec<u8> = Vec::with_capacity(100);
         packet.serialize(&mut Serializer::new(&mut buf)).unwrap();
 
         self.send_raw(&buf).await
+    }
+
+    pub fn split(self) -> (ReadHalf, WriteHalf) {
+        let (rd, wr) = self.socket.into_split();
+        (
+            ReadHalf {
+                socket: rd,
+                cipher: ChaCha20::new(&self.shared_key.into(), &self.nonce.into()),
+                addr: self.addr.clone(),
+                timeout: self.timeout.clone(),
+            },
+            WriteHalf {
+                socket: wr,
+                cipher: ChaCha20::new(&self.shared_key.into(), &self.nonce.into()),
+                addr: self.addr.clone(),
+                timeout: self.timeout.clone(),
+            },
+        )
+    }
+}
+
+pub struct WriteHalf {
+    socket: OwnedWriteHalf,
+    cipher: ChaCha20,
+    pub addr: SocketAddr,
+    timeout: Duration,
+}
+
+impl WriteHalf {
+    pub async fn send_raw(&mut self, data: &[u8]) -> Result<(), EncSocketError> {
+        let mut encoded_data: Vec<u8> = Vec::with_capacity(data.len());
+
+        let cur = Cursor::new(&mut encoded_data);
+        let mut encoder = zstd::Encoder::new(cur, 21).map_err(EncSocketError::Compress)?;
+        encoder.write_all(data).map_err(EncSocketError::Compress)?;
+        encoder.finish().map_err(EncSocketError::Compress)?;
+
+        self.cipher.apply_keystream(&mut encoded_data);
+        self.cipher.seek(0);
+
+        let packet_size = &(encoded_data.len() as u32).to_be_bytes();
+        self.socket
+            .write_all(packet_size)
+            .await
+            .map_err(EncSocketError::WriteSocket)?;
+        self.socket
+            .write_all(&encoded_data)
+            .await
+            .map_err(EncSocketError::WriteSocket)?;
+
+        Ok(())
+    }
+
+    pub async fn send<PT: Serialize + Debug>(&mut self, packet: PT) -> Result<(), EncSocketError> {
+        debug!("Sending {:?} to {:?}", packet, self.addr);
+        let mut buf: Vec<u8> = Vec::with_capacity(100);
+        packet.serialize(&mut Serializer::new(&mut buf)).unwrap();
+
+        self.send_raw(&buf).await
+    }
+}
+
+pub struct ReadHalf {
+    socket: OwnedReadHalf,
+    cipher: ChaCha20,
+    pub addr: SocketAddr,
+    timeout: Duration,
+}
+
+impl ReadHalf {
+    pub async fn read_exact(&mut self, buffer: &mut [u8]) -> Result<usize, EncSocketError> {
+        let mut received_size = 0;
+        let mut total_read = 0;
+        while received_size < buffer.len() {
+            let left = buffer.len() - received_size;
+            if left < BUFFER_RECV_SIZE {
+                total_read += tokio::time::timeout(
+                    self.timeout,
+                    self.socket.read_exact(&mut buffer[received_size..]),
+                )
+                .await
+                .map_err(|_| EncSocketError::Timeout)?
+                .map_err(EncSocketError::ReadSocket)?;
+                break;
+            }
+            total_read += tokio::time::timeout(
+                self.timeout,
+                self.socket
+                    .read_exact(&mut buffer[received_size..received_size + BUFFER_RECV_SIZE]),
+            )
+            .await
+            .map_err(|_| EncSocketError::Timeout)?
+            .map_err(EncSocketError::ReadSocket)?;
+
+            received_size += BUFFER_RECV_SIZE;
+        }
+        Ok(total_read)
+    }
+    pub async fn recv_raw(&mut self) -> Result<(usize, Vec<u8>), EncSocketError> {
+        // read size of the packet
+        let mut recv_buffer = [0u8; 4];
+
+        self.read_exact(&mut recv_buffer).await?;
+
+        let packet_size = u32::from_be_bytes(recv_buffer) as usize;
+
+        debug!(
+            "Received packet from the peer: {:?} | size: {:?}",
+            self.addr, packet_size
+        );
+
+        if packet_size > MAX_PACKET_SIZE {
+            return Err(EncSocketError::TooBigPacket(packet_size));
+        }
+
+        // read actual packet
+        let mut recv_buffer = vec![0u8; packet_size];
+        self.read_exact(&mut recv_buffer).await?;
+
+        // decrypt packet
+        self.cipher.apply_keystream(&mut recv_buffer);
+        self.cipher.seek(0);
+
+        // uncompress packet
+        let mut decoded_data: Vec<u8> = Vec::with_capacity(packet_size);
+        let cur = Cursor::new(recv_buffer);
+        let mut decoder = zstd::Decoder::new(cur).map_err(EncSocketError::Decompress)?;
+        decoder
+            .read_to_end(&mut decoded_data)
+            .map_err(EncSocketError::Decompress)?;
+
+        Ok((packet_size, decoded_data))
+    }
+    pub async fn recv<'a, PT: Deserialize<'a>>(&mut self) -> Result<PT, EncSocketError> {
+        PT::deserialize(&mut Deserializer::new(Cursor::new(
+            self.recv_raw().await?.1,
+        )))
+        .map_err(EncSocketError::Deserialize)
     }
 }
 

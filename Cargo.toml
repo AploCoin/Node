@@ -26,6 +26,8 @@ tracing-appender = "0.2.2"
 tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
 x25519-dalek = "1.2.0"
 zstd = "0.9"
+futures = "0.3"
+crossbeam-channel = "0.5"
 
 [profile.dev]
 overflow-checks = false
