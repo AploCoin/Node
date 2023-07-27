@@ -76,7 +76,7 @@ impl EncSocket {
         nonce
     }
 
-    /// Recieve new connection as a server
+    /// receive new connection as a server
     pub async fn new_connection(
         mut socket: TcpStream,
         addr: SocketAddr,
@@ -280,7 +280,6 @@ impl EncSocket {
                 socket: wr,
                 cipher: ChaCha20::new(&self.shared_key.into(), &self.nonce.into()),
                 addr: self.addr.clone(),
-                timeout: self.timeout.clone(),
             },
         )
     }
@@ -290,7 +289,6 @@ pub struct WriteHalf {
     socket: OwnedWriteHalf,
     cipher: ChaCha20,
     pub addr: SocketAddr,
-    timeout: Duration,
 }
 
 impl WriteHalf {
