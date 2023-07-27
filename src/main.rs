@@ -11,6 +11,7 @@ mod newdata;
 use blockchaintree::blockchaintree::BlockChainTree;
 use std::collections::HashSet;
 use std::io;
+use std::net::Ipv4Addr;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::signal;
@@ -20,7 +21,8 @@ use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info};
 use tracing_subscriber::{fmt, layer::SubscriberExt, EnvFilter};
 
-use crate::models::{NodeContext, PropagatedPacket};
+use crate::models::NodeContext;
+use crate::models::ReceivedPacket;
 
 #[tokio::main]
 async fn main() -> errors::ResultSmall<()> {
@@ -50,24 +52,11 @@ async fn main() -> errors::ResultSmall<()> {
 
     // configure channels
     let (tx, mut rx) = broadcast::channel::<u8>(1);
-    let (txp, _) = broadcast::channel::<PropagatedPacket>(100);
+    let (txp, _) = broadcast::channel::<ReceivedPacket>(100);
     let (new_peers_tx, _) = broadcast::channel::<SocketAddr>(100);
 
     let peers: Arc<RwLock<HashSet<SocketAddr>>> =
         Arc::new(RwLock::new(HashSet::with_capacity(100)));
-
-    debug!("Loading peers");
-    match tools::load_peers(peers.clone()).await {
-        Ok(_) => {
-            info!("Successfuly loaded peers from the file")
-        }
-        Err(e) => {
-            error!(
-                "Failed to load peers from the file, due to: {}",
-                e.to_string()
-            );
-        }
-    }
 
     // loading blockchain
     info!("Loading blockchain");
@@ -92,8 +81,8 @@ async fn main() -> errors::ResultSmall<()> {
     let context = NodeContext {
         peers: peers.clone(),
         shutdown: tx,
-        propagate_packet: txp,
-        new_peers_tx,
+        propagate_packet: txp.clone(),
+        new_peers_tx: new_peers_tx.clone(),
         blockchain: blockchain.clone(),
         new_data: Default::default(),
     };
@@ -111,6 +100,22 @@ async fn main() -> errors::ResultSmall<()> {
     let fut = node::update_blockchain(context.clone());
     tokio::spawn(fut);
 
+    debug!("Sleeping to give time for the tasks to subscribe");
+    sleep(Duration::from_millis(500)).await;
+
+    debug!("Loading peers");
+    match tools::load_peers(new_peers_tx).await {
+        Ok(_) => {
+            info!("Successfuly loaded peers from the file")
+        }
+        Err(e) => {
+            error!(
+                "Failed to load peers from the file, due to: {}",
+                e.to_string()
+            );
+        }
+    }
+
     info!("Node started");
 
     // giving the node the time to subscribe
@@ -119,8 +124,18 @@ async fn main() -> errors::ResultSmall<()> {
 
     // waiting for tasks to finish
     debug!("Waiting for the ctr+c signal");
-    signal::ctrl_c().await.unwrap();
-    info!("recieved ctrl+c command, procceding to stop the node");
+    loop {
+        tokio::select! {
+            _ = signal::ctrl_c() => {break;},
+            _ = sleep(Duration::from_millis(15000)) => {
+                debug!("Propagating ping packet");
+                _ = txp.send(ReceivedPacket { packet: models::packet_models::Packet::Request { id: 1, data: models::packet_models::Request::Ping(models::packet_models::PingRequest{}) }, source_addr: SocketAddr::new(
+                        std::net::IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)),
+                        5050), timestamp: 228 });
+            }
+        }
+    }
+    info!("received ctrl+c command, procceding to stop the node");
     context.shutdown.send(0).unwrap();
     drop(context);
     loop {
@@ -130,7 +145,7 @@ async fn main() -> errors::ResultSmall<()> {
     }
 
     info!("Dumping peers to file");
-    match tools::dump_peers(peers).await {
+    match tools::dump_peers(peers.read().await.iter()).await {
         Ok(_) => {
             info!("Successfuly dumped peers to the file")
         }

@@ -5,6 +5,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+async-channel = "1.9"
 blockchaintree = { git = "https://github.com/AploCoin/BlockChainTree", branch = "main" }
 chacha20 = "0.9.0"
 dotenv = ">=0.15"
@@ -26,6 +27,7 @@ tracing-appender = "0.2.2"
 tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
 x25519-dalek = "1.2.0"
 zstd = "0.9"
+futures = "0.3"
 
 [profile.dev]
 overflow-checks = false

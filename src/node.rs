@@ -4,14 +4,15 @@ use std::net::{SocketAddr, SocketAddrV4};
 use std::str::FromStr;
 
 use crate::config::*;
-use crate::encsocket::EncSocket;
+use crate::encsocket::{EncSocket, ReadHalf, WriteHalf};
 use crate::errors::node_errors::NodeError;
 use crate::errors::*;
 use crate::handlers::*;
 use crate::models;
 use crate::models::*;
 use crate::newdata::*;
-use crate::tools;
+use crate::tools::{self, current_time};
+use async_channel::{Receiver as ACReceiver, Sender as ACSender};
 use blockchaintree::block::MainChainBlock;
 use lazy_static::lazy_static;
 use std::sync::Arc;
@@ -22,7 +23,7 @@ use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info};
 
 lazy_static! {
-    static ref PEER_TIMEOUT: Duration = Duration::from_secs(15);
+    static ref PEER_TIMEOUT: Duration = Duration::from_secs(30);
 }
 
 pub async fn update_blockchain_wrapped(context: NodeContext) {
@@ -34,7 +35,7 @@ pub async fn update_blockchain_wrapped(context: NodeContext) {
         let height = context.blockchain.get_main_chain().get_height().await;
         if let Some(e) = context
             .propagate_packet
-            .send(PropagatedPacket {
+            .send(ReceivedPacket {
                 packet: packet_models::Packet::Request {
                     id: 0,
                     data: packet_models::Request::GetBlocksByHeights(
@@ -47,6 +48,7 @@ pub async fn update_blockchain_wrapped(context: NodeContext) {
                 source_addr: SocketAddr::V4(unsafe {
                     SocketAddrV4::from_str("0.0.0.0:0").unwrap_unchecked()
                 }),
+                timestamp: current_time(),
             })
             .err()
         {
@@ -76,7 +78,7 @@ pub async fn update_blockchain_wrapped(context: NodeContext) {
             let mut max_approves = Approves {
                 total_approves: 0,
                 peers: Default::default(),
-                last_recieved: 0,
+                last_received: 0,
             };
 
             let mut max_block: Option<Arc<dyn MainChainBlock + Send + Sync>> = None;
@@ -91,7 +93,7 @@ pub async fn update_blockchain_wrapped(context: NodeContext) {
 
             let max_block = max_block.unwrap();
 
-            if tools::current_time() as usize - max_approves.last_recieved >= MIN_BLOCK_APPROVE_TIME
+            if tools::current_time() as usize - max_approves.last_received >= MIN_BLOCK_APPROVE_TIME
             {
                 info!("Found old enough block to update blockchain");
                 context
@@ -110,7 +112,7 @@ pub async fn update_blockchain_wrapped(context: NodeContext) {
 
                 if let Some(e) = context
                     .propagate_packet
-                    .send(PropagatedPacket {
+                    .send(ReceivedPacket {
                         packet: packet_models::Packet::Request {
                             id: 0,
                             data: packet_models::Request::GetBlocksByHeights(
@@ -123,6 +125,7 @@ pub async fn update_blockchain_wrapped(context: NodeContext) {
                         source_addr: SocketAddr::V4(unsafe {
                             SocketAddrV4::from_str("0.0.0.0:0").unwrap_unchecked()
                         }),
+                        timestamp: current_time(),
                     })
                     .err()
                 {
@@ -137,11 +140,11 @@ pub async fn update_blockchain_wrapped(context: NodeContext) {
 }
 
 pub async fn update_blockchain(context: NodeContext) {
-    let mut shutdown_reciever = context.shutdown.subscribe();
+    let mut shutdown_receiver = context.shutdown.subscribe();
 
     tokio::select! {
         _ = update_blockchain_wrapped(context) => {},
-        _ = shutdown_reciever.recv() => {}
+        _ = shutdown_receiver.recv() => {}
     }
 }
 
@@ -149,14 +152,14 @@ pub async fn update_blockchain(context: NodeContext) {
 pub async fn start(context: NodeContext) -> Result<(), node_errors::NodeError> {
     let mut rx = context.shutdown.subscribe();
 
-    tokio::select! {
-        _ = connect_to_peers(
-            context.clone()
-        ) => {},
-        _ = rx.recv() => {
-            return Ok(());
-        }
-    };
+    // tokio::select! {
+    //     _ = connect_to_peers(
+    //         context.clone()
+    //     ) => {},
+    //     _ = rx.recv() => {
+    //         return Ok(());
+    //     }
+    // };
 
     let listener = TcpListener::bind(*SERVER_ADDRESS)
         .await
@@ -168,7 +171,7 @@ pub async fn start(context: NodeContext) -> Result<(), node_errors::NodeError> {
                 res.map_err( NodeError::AcceptConnection)?
             },
             _ = rx.recv() => {
-                debug!("Recieved shutdown command");
+                debug!("received shutdown command");
                 context.shutdown.send(0).unwrap();
                 break;
             }
@@ -208,8 +211,6 @@ async fn handle_incoming_wrapped(
     addr: &SocketAddr,
     context: NodeContext,
 ) -> Result<(), NodeError> {
-    let mut rx_propagate = context.propagate_packet.subscribe();
-
     let mut waiting_response: HashSet<u64> = HashSet::with_capacity(20);
 
     let mut socket = EncSocket::new_connection(socket, *addr, *PEER_TIMEOUT)
@@ -226,67 +227,17 @@ async fn handle_incoming_wrapped(
         .map_err(|e| NodeError::SendPacket(*addr, e))?;
     waiting_response.insert(0);
 
-    // main loop
-    loop {
-        let packet = tokio::select! {
-            propagate_message = rx_propagate.recv() => {
-                let mut propagate_data = propagate_message.map_err(|e| NodeError::PropagationRead(*addr, e))?;
-                if propagate_data.source_addr == *addr{
-                    continue;
-                }
+    let (socket, write_socket) = socket.split();
+    let (send_new_packet, receive_new_packet) = async_channel::unbounded::<ReceivedPacket>();
 
-                let mut packet_id: u64 = rand::random();
-                while waiting_response.get(&packet_id).is_some() {
-                    packet_id = rand::random();
-                }
+    //context.peers.write().await.insert(addr.clone());
 
-                propagate_data.packet.set_id(packet_id);
-                waiting_response.insert(packet_id);
-
-                socket.send(propagate_data.packet).await.map_err(|e| NodeError::SendPacket(*addr, e))?;
-                continue;
-            },
-            packet = socket.recv::<packet_models::Packet>() => {
-                packet.map_err(|e| NodeError::ReceievePacket(*addr, e))?
-            },
-            _ = sleep(Duration::from_millis(10000)) => {
-                //let packet_id: u64 = rand::random();
-                socket.send(
-                    packet_models::Packet::Request{id:1,data:packet_models::Request::Ping(packet_models::PingRequest{})}).await.map_err(|e| NodeError::SendPacket(*addr, e))?;
-                waiting_response.insert(1);
-                continue;
-            }
-        };
-
-        // handle packet
-        if let Err(e) = process_packet(
-            &mut socket,
-            &packet,
-            &mut waiting_response,
-            tools::current_time(),
-            &context,
-        )
-        .await
-        {
-            debug!(
-                "Error processing packet for the peer {}: {:?} ERROR: {:?}",
-                addr, packet, e
-            );
-            break;
-        }
-    }
+    tokio::select! {
+        result = main_peer_loop(context.clone(), socket, send_new_packet ) => result,
+        result = peer_worker(context.clone(), write_socket, waiting_response, receive_new_packet) => result
+    }?;
 
     Ok(())
-}
-
-async fn connect_to_peers(context: NodeContext) {
-    let peers = context.peers.read().await;
-
-    info!("Connecting to {} peers", peers.len());
-
-    for peer in peers.iter() {
-        tokio::spawn(connect_to_peer(*peer, context.clone()));
-    }
 }
 
 pub async fn connect_to_peer(addr: SocketAddr, context: NodeContext) {
@@ -300,7 +251,7 @@ pub async fn connect_to_peer(addr: SocketAddr, context: NodeContext) {
         },
         ret = handle_peer(
             &addr,
-            context
+            &context
         ) => {
             if let Err(e) = ret { error!("Unexpected error on peer {}: {:?}", addr, e) }
         }
@@ -311,10 +262,7 @@ pub async fn connect_to_peer(addr: SocketAddr, context: NodeContext) {
     peers.remove(&addr);
 }
 
-pub async fn handle_peer(addr: &SocketAddr, context: NodeContext) -> Result<(), NodeError> {
-    // set up
-    let mut rx_propagate = context.propagate_packet.subscribe();
-
+pub async fn handle_peer(addr: &SocketAddr, context: &NodeContext) -> Result<(), NodeError> {
     let mut socket = EncSocket::create_new_connection(*addr, *PEER_TIMEOUT)
         .await
         .map_err(|e| NodeError::ConnectToPeer(*addr, e))?;
@@ -346,12 +294,55 @@ pub async fn handle_peer(addr: &SocketAddr, context: NodeContext) -> Result<(), 
         .map_err(|e| NodeError::SendPacket(*addr, e))?;
     waiting_response.insert(0);
 
-    // main loop
+    let (socket, write_socket) = socket.split();
+    let (send_new_packet, receive_new_packet) = async_channel::unbounded::<ReceivedPacket>();
+
+    context.peers.write().await.insert(addr.clone());
+
+    tokio::select! {
+        result = main_peer_loop(context.clone(), socket, send_new_packet ) => result,
+        result = peer_worker(context.clone(), write_socket, waiting_response, receive_new_packet) => result
+    }?;
+
+    Ok(())
+}
+
+async fn main_peer_loop(
+    _context: NodeContext,
+    mut socket: ReadHalf,
+    send_new_packet: ACSender<ReceivedPacket>,
+) -> Result<(), NodeError> {
+    loop {
+        let packet = socket
+            .recv::<packet_models::Packet>()
+            .await
+            .map_err(|e| NodeError::ReceievePacket(socket.addr, e))?;
+
+        send_new_packet
+            .send(ReceivedPacket {
+                packet,
+                source_addr: socket.addr,
+                timestamp: tools::current_time(),
+            })
+            .await
+            .unwrap();
+    }
+}
+
+pub async fn peer_worker(
+    context: NodeContext,
+    mut socket: WriteHalf,
+    mut waiting_response: HashSet<u64>,
+    received_packet_channel: ACReceiver<ReceivedPacket>,
+) -> Result<(), NodeError> {
+    let mut propagated_packet_rx = context.propagate_packet.subscribe();
     loop {
         let packet = tokio::select! {
-            propagate_message = rx_propagate.recv() => {
-                let mut propagate_data = propagate_message.map_err(|e| NodeError::PropagationRead(*addr, e))?;
-                if propagate_data.source_addr == *addr{
+            packet = received_packet_channel.recv() => packet.unwrap(),
+
+            propagated_packet = propagated_packet_rx.recv() => {
+                let mut packet = propagated_packet.unwrap();
+                if packet.source_addr == socket.addr{
                     continue;
                 }
 
@@ -360,54 +351,39 @@ pub async fn handle_peer(addr: &SocketAddr, context: NodeContext) -> Result<(), 
                     packet_id = rand::random();
                 }
 
-                propagate_data.packet.set_id(packet_id);
-
+                packet.packet.set_id(packet_id);
                 waiting_response.insert(packet_id);
-
-                socket.send(propagate_data.packet).await.map_err(|e| NodeError::SendPacket(*addr, e))?;
+                socket.send(packet.packet).await.map_err(|e| NodeError::SendPacket(socket.addr, e))?;
                 continue;
-            },
-            packet = socket.recv::<packet_models::Packet>() => {
-                packet.map_err(|e| NodeError::ReceievePacket(*addr, e))?
             }
         };
 
-        // handle packet
-        if let Err(e) = process_packet(
+        process_packet(
             &mut socket,
-            &packet,
+            &packet.packet,
             &mut waiting_response,
-            tools::current_time(),
+            packet.timestamp,
             &context,
         )
-        .await
-        {
-            error!(
-                "Error processing packet for the peer {}: {:?} | Error: {:?}",
-                addr, packet, e
-            );
-            break;
-        }
+        .await?;
     }
-
-    Ok(())
 }
 
 async fn process_packet(
-    socket: &mut EncSocket,
+    socket: &mut WriteHalf,
     packet: &packet_models::Packet,
     waiting_response: &mut HashSet<u64>,
-    recieved_timestamp: u64,
+    received_timestamp: u64,
     context: &NodeContext,
 ) -> Result<(), NodeError> {
     match packet {
         packet_models::Packet::Request {
-            id: recieved_id,
+            id: received_id,
             data: r,
         } => match r {
             packet_models::Request::Ping(_) => socket
                 .send(packet_models::Packet::Response {
-                    id: *recieved_id,
+                    id: *received_id,
                     data: packet_models::Response::Ping(packet_models::PingResponse {}),
                 })
                 .await
@@ -416,32 +392,32 @@ async fn process_packet(
                 announce_request_handler(context, waiting_response, socket, p).await?;
             }
             packet_models::Request::GetAmount(p) => {
-                get_amount_request_handler(context, socket, p, *recieved_id).await?;
+                get_amount_request_handler(context, socket, p, *received_id).await?;
             }
             packet_models::Request::GetNodes(_) => {
-                get_nodes_request_handler(context, socket, *recieved_id).await?;
+                get_nodes_request_handler(context, socket, *received_id).await?;
             }
             packet_models::Request::GetTransaction(p) => {
-                get_transaction_request_handler(context, socket, *recieved_id, p).await?;
+                get_transaction_request_handler(context, socket, *received_id, p).await?;
             }
             packet_models::Request::GetBlockByHash(p) => {
-                get_block_by_hash_request_handler(context, socket, *recieved_id, p).await?;
+                get_block_by_hash_request_handler(context, socket, *received_id, p).await?;
             }
             packet_models::Request::GetBlockByHeight(p) => {
-                get_block_by_height_request_handler(context, socket, *recieved_id, p).await?;
+                get_block_by_height_request_handler(context, socket, *received_id, p).await?;
             }
             packet_models::Request::GetBlocksByHeights(p) => {
-                get_blocks_by_height(context, socket, *recieved_id, p).await?;
+                get_blocks_by_height(context, socket, *received_id, p).await?;
             }
             packet_models::Request::GetLastBlock(_) => {
-                get_last_block_request_handler(context, socket, *recieved_id).await?;
+                get_last_block_request_handler(context, socket, *received_id).await?;
             }
             packet_models::Request::NewTransaction(p) => {
                 new_transaction_request_handler(
                     context,
                     socket,
-                    *recieved_id,
-                    recieved_timestamp,
+                    *received_id,
+                    received_timestamp,
                     waiting_response,
                     p,
                 )
@@ -451,8 +427,8 @@ async fn process_packet(
                 submit_pow_request_handler(
                     context,
                     socket,
-                    *recieved_id,
-                    recieved_timestamp,
+                    *received_id,
+                    received_timestamp,
                     waiting_response,
                     p,
                 )
@@ -462,8 +438,8 @@ async fn process_packet(
                 new_block_request_handler(
                     context,
                     socket,
-                    *recieved_id,
-                    recieved_timestamp,
+                    *received_id,
+                    received_timestamp,
                     waiting_response,
                     p,
                 )
@@ -471,10 +447,10 @@ async fn process_packet(
             }
         },
         packet_models::Packet::Response {
-            id: recieved_id,
+            id: received_id,
             data: r,
         } => {
-            if !waiting_response.remove(recieved_id) {
+            if !waiting_response.remove(received_id) {
                 socket
                     .send(&packet_models::Packet::Error(packet_models::ErrorR {
                         code: packet_models::ErrorCode::UnexpectedResponseId,
@@ -492,7 +468,7 @@ async fn process_packet(
                 packet_models::Response::Ping(_) => {}
                 packet_models::Response::GetBlock(_) => todo!(),
                 packet_models::Response::GetBlocks(p) => {
-                    get_blocks_response_handler(context, socket, recieved_timestamp, p).await?;
+                    get_blocks_response_handler(context, socket, received_timestamp, p).await?;
                 }
                 packet_models::Response::SubmitPow(_) => todo!(),
             }

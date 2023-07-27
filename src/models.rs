@@ -1,3 +1,4 @@
+use crate::encsocket::WriteHalf;
 use crate::errors::{models_errors::AddressError, *};
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -12,17 +13,30 @@ use std::sync::Arc;
 
 use tokio::sync::{broadcast::Sender, RwLock};
 
+// #[derive(Clone, Debug)]
+// pub struct PropagatedPacket {
+//     pub packet: packet_models::Packet,
+//     pub source_addr: SocketAddr,
+// }
+
 #[derive(Clone, Debug)]
-pub struct PropagatedPacket {
+pub struct ReceivedPacket {
     pub packet: packet_models::Packet,
     pub source_addr: SocketAddr,
+    pub timestamp: u64,
+}
+
+#[derive(Clone)]
+pub struct PeerContext {
+    pub socket: Arc<WriteHalf>,
+    pub waiting_response: Arc<RwLock<HashSet<u64>>>,
 }
 
 #[derive(Clone)]
 pub struct NodeContext {
     pub peers: Arc<RwLock<HashSet<SocketAddr>>>,
     pub shutdown: Sender<u8>,
-    pub propagate_packet: Sender<PropagatedPacket>,
+    pub propagate_packet: Sender<ReceivedPacket>,
     pub new_peers_tx: Sender<SocketAddr>,
     pub blockchain: Arc<BlockChainTree>,
     pub new_data: Arc<RwLock<NewData>>,
@@ -61,6 +75,14 @@ pub mod packet_models {
             match self {
                 Packet::Request { id, .. } => *id = new_id,
                 Packet::Response { id, .. } => *id = new_id,
+                Packet::Error(_) => todo!(),
+            }
+        }
+
+        pub fn get_id(&self) -> u64 {
+            match self {
+                Packet::Request { id, .. } => *id,
+                Packet::Response { id, .. } => *id,
                 Packet::Error(_) => todo!(),
             }
         }
@@ -303,7 +325,10 @@ pub fn bin2addr(bin: &[u8]) -> Result<SocketAddr, AddressError> {
     }
 }
 
-pub fn dump_addresses(addrs: &[SocketAddr]) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
+pub fn dump_addresses<'a, I>(addrs: I) -> (Option<Vec<u8>>, Option<Vec<u8>>)
+where
+    I: Iterator<Item = &'a SocketAddr>,
+{
     let mut ipv4: Vec<u8> = Vec::new();
     let mut ipv6: Vec<u8> = Vec::new();
 

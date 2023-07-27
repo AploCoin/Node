@@ -1,5 +1,4 @@
 use crate::config::MIN_BLOCK_APPROVE_TIME;
-use crate::encsocket::EncSocket;
 use crate::errors::node_errors::NodeError;
 use crate::models::{dump_addresses, parse_ipv4, parse_ipv6, peers_dump, NodeContext};
 use crate::{config, errors::*};
@@ -8,14 +7,13 @@ use blockchaintree::transaction::{Transaction, Transactionable};
 use rmp_serde::{Deserializer, Serializer};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use std::collections::HashSet;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::Cursor;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::RwLock;
+use tokio::sync::broadcast::Sender;
 
 #[macro_export]
 macro_rules! box_array {
@@ -43,7 +41,7 @@ pub fn current_time() -> u64 {
 
 const PEERS_BACKUP_FILE: &str = "peers.dump";
 
-pub async fn load_peers(peers_mut: Arc<RwLock<HashSet<SocketAddr>>>) -> ResultSmall<()> {
+pub async fn load_peers(new_peers: Sender<SocketAddr>) -> ResultSmall<()> {
     let file = File::open(PEERS_BACKUP_FILE)?;
 
     let mut decoder = zstd::Decoder::new(file)?;
@@ -54,38 +52,33 @@ pub async fn load_peers(peers_mut: Arc<RwLock<HashSet<SocketAddr>>>) -> ResultSm
 
     let peers = peers_dump::Peers::deserialize(&mut Deserializer::new(Cursor::new(decoded_data)))?;
 
-    let mut peers_storage = peers_mut.write().await;
+    //let mut peers_storage = peers_mut.write().await;
     if let Some(dump) = peers.ipv4 {
         let parsed = parse_ipv4(&dump)?;
         for addr in parsed {
-            peers_storage.insert(addr);
+            new_peers.send(addr).unwrap();
         }
     }
 
     if let Some(dump) = peers.ipv6 {
         let parsed = parse_ipv6(&dump)?;
         for addr in parsed {
-            peers_storage.insert(addr);
+            new_peers.send(addr).unwrap();
         }
     }
 
     Ok(())
 }
 
-pub async fn dump_peers(peers_mut: Arc<RwLock<HashSet<SocketAddr>>>) -> ResultSmall<()> {
+pub async fn dump_peers<'a, I>(peers_to_dump: I) -> ResultSmall<()>
+where
+    I: Iterator<Item = &'a SocketAddr>,
+{
     let target = File::create(PEERS_BACKUP_FILE)?;
 
     let mut encoder = zstd::Encoder::new(target, 21)?;
 
-    let peers_storage = peers_mut.read().await;
-
-    let mut peers: Vec<SocketAddr> = Vec::with_capacity(peers_storage.len());
-
-    for peer in peers_storage.iter() {
-        peers.push(*peer);
-    }
-
-    let (ipv4, ipv6) = dump_addresses(&peers);
+    let (ipv4, ipv6) = dump_addresses(peers_to_dump);
 
     let mut buf: Vec<u8> = Vec::new();
 
@@ -141,11 +134,11 @@ pub fn deserialize_transactions(data: &[u8]) -> Result<Vec<Transaction>, node_er
 ///
 /// returns false, if the block already existed at some point, somewhere
 pub async fn new_block(
-    recieved_block: Arc<dyn MainChainBlock + Send + Sync>,
+    received_block: Arc<dyn MainChainBlock + Send + Sync>,
     transaction_dumps: &[u8],
     context: &NodeContext,
-    socket: &mut EncSocket,
-    recieved_timestamp: u64,
+    address: &SocketAddr,
+    received_timestamp: u64,
 ) -> Result<bool, NodeError> {
     let transactions = deserialize_transactions(transaction_dumps)?;
 
@@ -153,7 +146,7 @@ pub async fn new_block(
 
     if !context
         .blockchain
-        .new_main_chain_block(&recieved_block)
+        .new_main_chain_block(&received_block)
         .await
         .map_err(|e| NodeError::AddMainChainBlock(e.to_string()))?
     {
@@ -162,7 +155,7 @@ pub async fn new_block(
         let existing_block = context
             .blockchain
             .get_main_chain()
-            .find_by_height(recieved_block.get_info().height)
+            .find_by_height(received_block.get_info().height)
             .await
             .map_err(|e| NodeError::GetBlock(e.to_string()))?
             .ok_or(NodeError::GetBlock(
@@ -190,7 +183,7 @@ pub async fn new_block(
                 existing_block,
                 &transactions,
                 &SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0),
-                recieved_timestamp as usize,
+                received_timestamp as usize,
             )
             .await
             .is_err()
@@ -201,17 +194,17 @@ pub async fn new_block(
 
     if let Ok(new) = new_data
         .new_block(
-            recieved_block.clone(),
+            received_block.clone(),
             &transactions,
-            &socket.addr,
-            recieved_timestamp as usize,
+            address,
+            received_timestamp as usize,
         )
         .await
     {
         if !new {
             // block was already in new data
             let mut blocks_same_height =
-                new_data.get_blocks_same_height(recieved_block.get_info().height);
+                new_data.get_blocks_same_height(received_block.get_info().height);
 
             // sort ascending with approves
             blocks_same_height.sort_by(|a, b| {
@@ -221,7 +214,7 @@ pub async fn new_block(
                 match a_approves.total_approves.cmp(&b_approves.total_approves) {
                     Ordering::Greater => Ordering::Greater,
                     Ordering::Less => Ordering::Less,
-                    Ordering::Equal => a_approves.last_recieved.cmp(&b_approves.last_recieved), // compare timestamps
+                    Ordering::Equal => a_approves.last_received.cmp(&b_approves.last_received), // compare timestamps
                 }
             });
 
@@ -231,12 +224,12 @@ pub async fn new_block(
                     let approves = new_data
                         .get_block_approves(&max_block.hash().unwrap())
                         .unwrap(); // critical error
-                    if current_time() as usize - approves.last_recieved
+                    if current_time() as usize - approves.last_received
                         >= config::MIN_BLOCK_APPROVE_TIME
                     {
                         context
                             .blockchain
-                            .overwrite_main_chain_block(&recieved_block, &transactions)
+                            .overwrite_main_chain_block(&received_block, &transactions)
                             .await
                             .map_err(|e| NodeError::AddMainChainBlock(e.to_string()))?;
                     }
@@ -251,7 +244,7 @@ pub async fn new_block(
                         .unwrap(); // critical error
 
                     if max_block_approves.total_approves >= next_block_approves.total_approves * 2
-                        || current_time() as usize - max_block_approves.last_recieved
+                        || current_time() as usize - max_block_approves.last_received
                             > MIN_BLOCK_APPROVE_TIME
                     {
                         context
@@ -274,7 +267,7 @@ pub async fn new_block(
 
 #[cfg(test)]
 mod dump_parse_tests {
-    use std::net::Ipv4Addr;
+    use std::{collections::HashSet, net::Ipv4Addr};
 
     use super::*;
 
@@ -282,11 +275,41 @@ mod dump_parse_tests {
     async fn dump_peers_test() {
         let mut peers: HashSet<SocketAddr> = HashSet::new();
 
+        // peers.insert(SocketAddr::new(
+        //     std::net::IpAddr::V4(Ipv4Addr::new(109, 248, 61, 27)),
+        //     5050,
+        // ));
+
+        // peers.insert(SocketAddr::new(
+        //     std::net::IpAddr::V4(Ipv4Addr::new(213, 160, 170, 230)),
+        //     5050,
+        // ));
+
+        // peers.insert(SocketAddr::new(
+        //     std::net::IpAddr::V4(Ipv4Addr::new(92, 63, 189, 56)),
+        //     5050,
+        // ));
+
+        // peers.insert(SocketAddr::new(
+        //     std::net::IpAddr::V4(Ipv4Addr::new(109, 248, 61, 27)),
+        //     5050,
+        // ));
+
+        // peers.insert(SocketAddr::new(
+        //     std::net::IpAddr::V4(Ipv4Addr::new(172, 16, 111, 181)),
+        //     5050,
+        // ));
+
         peers.insert(SocketAddr::new(
-            std::net::IpAddr::V4(Ipv4Addr::new(192, 168, 1, 213)),
+            std::net::IpAddr::V4(Ipv4Addr::new(192, 168, 1, 57)),
             5050,
         ));
 
-        dump_peers(Arc::new(RwLock::new(peers))).await.unwrap()
+        // peers.insert(SocketAddr::new(
+        //     std::net::IpAddr::V4(Ipv4Addr::new(185, 154, 192, 59)),
+        //     5050,
+        // ));
+
+        dump_peers(peers.iter()).await.unwrap()
     }
 }

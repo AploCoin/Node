@@ -14,7 +14,7 @@ use tracing::{debug, error, warn};
 
 use crate::{
     config::{self, MAX_BLOCKS_SYNC_AMOUNT, MAX_POW_SUBMIT_DELAY, SERVER_ADDRESS},
-    encsocket::EncSocket,
+    encsocket::WriteHalf,
     errors::node_errors::NodeError,
     models::{
         bin2addr, dump_addresses,
@@ -23,15 +23,15 @@ use crate::{
             GetBlockByHeightRequest, GetBlocksByHeightsRequest, GetBlocksResponse, GetNodesReponse,
             GetTransactionRequest, NewBlockRequest, NewTransactionRequest, SubmitPow,
         },
-        parse_ipv4, NodeContext, PropagatedPacket,
+        parse_ipv4, NodeContext, ReceivedPacket,
     },
-    tools::new_block,
+    tools::{self, new_block},
 };
 
 pub async fn announce_request_handler(
     context: &NodeContext,
     waiting_response: &mut HashSet<u64>,
-    socket: &mut EncSocket,
+    socket: &mut WriteHalf,
     packet: &AnnounceRequest,
 ) -> Result<(), NodeError> {
     let addr = bin2addr(&packet.addr).map_err(NodeError::BinToAddress)?;
@@ -52,8 +52,8 @@ pub async fn announce_request_handler(
         return Ok(());
     }
 
-    let mut peers = context.peers.write().await;
-    let peer_doesnt_exist = peers.insert(addr);
+    let peers = context.peers.read().await;
+    let peer_doesnt_exist = peers.get(&addr).is_none();
     drop(peers);
 
     if peer_doesnt_exist {
@@ -70,9 +70,10 @@ pub async fn announce_request_handler(
 
         context
             .propagate_packet
-            .send(PropagatedPacket {
+            .send(ReceivedPacket {
                 packet,
                 source_addr: socket.addr,
+                timestamp: tools::current_time(),
             })
             .map_err(|e| NodeError::PropagationSend(addr, e.to_string()))?;
         context
@@ -86,9 +87,9 @@ pub async fn announce_request_handler(
 
 pub async fn get_amount_request_handler(
     context: &NodeContext,
-    socket: &mut EncSocket,
+    socket: &mut WriteHalf,
     packet: &GetAmountRequest,
-    recieved_id: u64,
+    received_id: u64,
 ) -> Result<(), NodeError> {
     if packet.address.len() != 33 {
         socket
@@ -130,7 +131,7 @@ pub async fn get_amount_request_handler(
 
     socket
         .send(packet_models::Packet::Response {
-            id: recieved_id,
+            id: received_id,
             data: packet_models::Response::GetAmount(packet_models::GetAmountResponse {
                 amount: funds_dumped,
             }),
@@ -143,8 +144,8 @@ pub async fn get_amount_request_handler(
 
 pub async fn get_nodes_request_handler(
     context: &NodeContext,
-    socket: &mut EncSocket,
-    recieved_id: u64,
+    socket: &mut WriteHalf,
+    received_id: u64,
 ) -> Result<(), NodeError> {
     let mut peers_cloned: Box<[SocketAddr]>;
     {
@@ -159,10 +160,10 @@ pub async fn get_nodes_request_handler(
     }
 
     // dump ipv4 and ipv6 addresses in u8 vecs separately
-    let (ipv4, ipv6) = dump_addresses(&peers_cloned);
+    let (ipv4, ipv6) = dump_addresses(context.peers.read().await.iter());
 
     let packet = packet_models::Packet::Response {
-        id: recieved_id,
+        id: received_id,
         data: packet_models::Response::GetNodes(packet_models::GetNodesReponse { ipv4, ipv6 }),
     };
 
@@ -176,12 +177,12 @@ pub async fn get_nodes_request_handler(
 
 pub async fn get_transaction_request_handler(
     context: &NodeContext,
-    socket: &mut EncSocket,
-    recieved_id: u64,
+    socket: &mut WriteHalf,
+    received_id: u64,
     packet: &GetTransactionRequest,
 ) -> Result<(), NodeError> {
     let packet = packet_models::Packet::Response {
-        id: recieved_id,
+        id: received_id,
         data: packet_models::Response::GetTransaction(packet_models::GetTransactionResponse {
             transaction: context
                 .blockchain
@@ -207,8 +208,8 @@ pub async fn get_transaction_request_handler(
 
 pub async fn get_block_by_hash_request_handler(
     context: &NodeContext,
-    socket: &mut EncSocket,
-    recieved_id: u64,
+    socket: &mut WriteHalf,
+    received_id: u64,
     packet: &GetBlockByHashRequest,
 ) -> Result<(), NodeError> {
     let block_dump = match context
@@ -226,7 +227,7 @@ pub async fn get_block_by_hash_request_handler(
 
     socket
         .send(packet_models::Packet::Response {
-            id: recieved_id,
+            id: received_id,
             data: packet_models::Response::GetBlock(packet_models::GetBlockResponse {
                 dump: block_dump,
             }),
@@ -238,8 +239,8 @@ pub async fn get_block_by_hash_request_handler(
 
 pub async fn get_block_by_height_request_handler(
     context: &NodeContext,
-    socket: &mut EncSocket,
-    recieved_id: u64,
+    socket: &mut WriteHalf,
+    received_id: u64,
     packet: &GetBlockByHeightRequest,
 ) -> Result<(), NodeError> {
     let block_dump = match context
@@ -256,7 +257,7 @@ pub async fn get_block_by_height_request_handler(
     };
     socket
         .send(packet_models::Packet::Response {
-            id: recieved_id,
+            id: received_id,
             data: packet_models::Response::GetBlock(packet_models::GetBlockResponse {
                 dump: block_dump,
             }),
@@ -268,8 +269,8 @@ pub async fn get_block_by_height_request_handler(
 
 pub async fn get_blocks_by_height(
     context: &NodeContext,
-    socket: &mut EncSocket,
-    recieved_id: u64,
+    socket: &mut WriteHalf,
+    received_id: u64,
     packet: &GetBlocksByHeightsRequest,
 ) -> Result<(), NodeError> {
     if packet.amount as usize > config::MAX_BLOCKS_IN_RESPONSE {
@@ -277,7 +278,7 @@ pub async fn get_blocks_by_height(
     } else if packet.amount == 0 {
         socket
             .send(packet_models::Packet::Response {
-                id: recieved_id,
+                id: received_id,
                 data: packet_models::Response::GetBlocks(packet_models::GetBlocksResponse {
                     blocks: Vec::new(),
                     transactions: Vec::new(),
@@ -293,7 +294,7 @@ pub async fn get_blocks_by_height(
     if height <= packet.start {
         socket
             .send(packet_models::Packet::Response {
-                id: recieved_id,
+                id: received_id,
                 data: packet_models::Response::GetBlocks(packet_models::GetBlocksResponse {
                     blocks: Vec::with_capacity(0),
                     transactions: Vec::with_capacity(0),
@@ -335,7 +336,7 @@ pub async fn get_blocks_by_height(
 
     socket
         .send(packet_models::Packet::Response {
-            id: recieved_id,
+            id: received_id,
             data: packet_models::Response::GetBlocks(packet_models::GetBlocksResponse {
                 blocks,
                 transactions,
@@ -348,8 +349,8 @@ pub async fn get_blocks_by_height(
 
 pub async fn get_last_block_request_handler(
     context: &NodeContext,
-    socket: &mut EncSocket,
-    recieved_id: u64,
+    socket: &mut WriteHalf,
+    received_id: u64,
 ) -> Result<(), NodeError> {
     let block_dump = match context
         .blockchain
@@ -366,7 +367,7 @@ pub async fn get_last_block_request_handler(
 
     socket
         .send(packet_models::Packet::Response {
-            id: recieved_id,
+            id: received_id,
             data: packet_models::Response::GetBlock(packet_models::GetBlockResponse {
                 dump: block_dump,
             }),
@@ -378,9 +379,9 @@ pub async fn get_last_block_request_handler(
 
 pub async fn new_transaction_request_handler(
     context: &NodeContext,
-    socket: &mut EncSocket,
-    recieved_id: u64,
-    recieved_timestamp: u64,
+    socket: &mut WriteHalf,
+    received_id: u64,
+    received_timestamp: u64,
     waiting_response: &mut HashSet<u64>,
     packet: &NewTransactionRequest,
 ) -> Result<(), NodeError> {
@@ -418,7 +419,7 @@ pub async fn new_transaction_request_handler(
     if let Some(last_block) = last_block {
         let transaction_time = transaction.get_timestamp();
         if transaction_time <= last_block.get_info().timestamp
-            || transaction_time > recieved_timestamp
+            || transaction_time > received_timestamp
         {
             return Err(NodeError::CreateTransaction(
                 "Wrong transaction time".into(),
@@ -452,15 +453,16 @@ pub async fn new_transaction_request_handler(
 
     context
         .propagate_packet
-        .send(PropagatedPacket {
+        .send(ReceivedPacket {
             packet,
             source_addr: socket.addr,
+            timestamp: tools::current_time(),
         })
         .map_err(|e| NodeError::PropagationSend(socket.addr, e.to_string()))?;
 
     socket
         .send(packet_models::Packet::Response {
-            id: recieved_id,
+            id: received_id,
             data: packet_models::Response::Ok(packet_models::OkResponse {}),
         })
         .await
@@ -471,21 +473,21 @@ pub async fn new_transaction_request_handler(
 
 pub async fn submit_pow_request_handler(
     context: &NodeContext,
-    socket: &mut EncSocket,
-    recieved_id: u64,
-    recieved_timestamp: u64,
+    socket: &mut WriteHalf,
+    received_id: u64,
+    received_timestamp: u64,
     waiting_response: &mut HashSet<u64>,
     packet: &SubmitPow,
 ) -> Result<(), NodeError> {
     if packet.address.len() != 33 {
         return Err(NodeError::WrongAddressSize(packet.address.len()));
     }
-    if packet.timestamp > recieved_timestamp {
+    if packet.timestamp > received_timestamp {
         return Err(NodeError::TimestampInFuture(
             packet.timestamp,
-            recieved_timestamp,
+            received_timestamp,
         ));
-    } else if recieved_timestamp - packet.timestamp > MAX_POW_SUBMIT_DELAY {
+    } else if received_timestamp - packet.timestamp > MAX_POW_SUBMIT_DELAY {
         return Err(NodeError::TimestampExpired);
     }
     let pow = BigUint::from_bytes_be(&packet.pow);
@@ -548,14 +550,15 @@ pub async fn submit_pow_request_handler(
     };
     context
         .propagate_packet
-        .send(PropagatedPacket {
+        .send(ReceivedPacket {
             packet: block_packet,
             source_addr: socket.addr,
+            timestamp: tools::current_time(),
         })
         .map_err(|e| NodeError::PropagationSend(socket.addr, e.to_string()))?;
 
     let response_packet = packet_models::Packet::Response {
-        id: recieved_id,
+        id: received_id,
         data: packet_models::Response::SubmitPow(packet_models::SubmitPowResponse {
             accepted: true,
         }),
@@ -571,20 +574,20 @@ pub async fn submit_pow_request_handler(
 
 pub async fn new_block_request_handler(
     context: &NodeContext,
-    socket: &mut EncSocket,
-    recieved_id: u64,
-    recieved_timestamp: u64,
+    socket: &mut WriteHalf,
+    received_id: u64,
+    received_timestamp: u64,
     waiting_response: &mut HashSet<u64>,
     packet: &NewBlockRequest,
 ) -> Result<(), NodeError> {
-    let recieved_block = block::deserialize_main_chain_block(&packet.dump)
+    let received_block = block::deserialize_main_chain_block(&packet.dump)
         .map_err(|e| NodeError::ParseBlock(e.to_string()))?;
     if new_block(
-        recieved_block,
+        received_block,
         &packet.transactions,
         context,
-        socket,
-        recieved_timestamp,
+        &socket.addr,
+        received_timestamp,
     )
     .await?
     {
@@ -603,15 +606,16 @@ pub async fn new_block_request_handler(
 
         context
             .propagate_packet
-            .send(PropagatedPacket {
+            .send(ReceivedPacket {
                 packet: block_packet,
                 source_addr: socket.addr,
+                timestamp: tools::current_time(),
             })
             .map_err(|e| NodeError::PropagationSend(socket.addr, e.to_string()))?;
     }
     socket
         .send(&packet_models::Packet::Response {
-            id: recieved_id,
+            id: received_id,
             data: packet_models::Response::Ok(packet_models::OkResponse {}),
         })
         .await
@@ -633,7 +637,7 @@ pub async fn get_nodes_response_handler(
                 warn!("A bad address was supplied: {:?}", addr);
                 continue;
             }
-            if !context.peers.write().await.insert(addr) {
+            if context.peers.read().await.get(&addr).is_some() {
                 continue;
             };
             context
@@ -651,7 +655,7 @@ pub async fn get_nodes_response_handler(
             {
                 continue;
             }
-            if !context.peers.write().await.insert(addr) {
+            if context.peers.read().await.get(&addr).is_some() {
                 continue;
             };
             context
@@ -665,29 +669,29 @@ pub async fn get_nodes_response_handler(
 
 pub async fn get_blocks_response_handler(
     context: &NodeContext,
-    socket: &mut EncSocket,
-    recieved_timestamp: u64,
+    socket: &mut WriteHalf,
+    received_timestamp: u64,
     packet: &GetBlocksResponse,
 ) -> Result<(), NodeError> {
-    let mut recieved_blocks: Vec<Arc<dyn MainChainBlock + Send + Sync>> =
+    let mut received_blocks: Vec<Arc<dyn MainChainBlock + Send + Sync>> =
         Vec::with_capacity(packet.blocks.len());
 
     for block in packet.blocks.iter().map(|dump| {
         block::deserialize_main_chain_block(dump).map_err(|e| NodeError::ParseBlock(e.to_string()))
     }) {
-        recieved_blocks.push(block?);
+        received_blocks.push(block?);
     }
 
-    if !recieved_blocks.is_empty() {
+    if !received_blocks.is_empty() {
         debug!("Propagating a packet to get new blocks");
         if let Some(e) = context
             .propagate_packet
-            .send(PropagatedPacket {
+            .send(ReceivedPacket {
                 packet: packet_models::Packet::Request {
                     id: 0,
                     data: packet_models::Request::GetBlocksByHeights(
                         packet_models::GetBlocksByHeightsRequest {
-                            start: unsafe { recieved_blocks.last().unwrap_unchecked() }
+                            start: unsafe { received_blocks.last().unwrap_unchecked() }
                                 .get_info()
                                 .height
                                 + 1,
@@ -698,6 +702,7 @@ pub async fn get_blocks_response_handler(
                 source_addr: SocketAddr::V4(unsafe {
                     SocketAddrV4::from_str("0.0.0.0:0").unwrap_unchecked()
                 }),
+                timestamp: tools::current_time(),
             })
             .err()
         {
@@ -705,14 +710,14 @@ pub async fn get_blocks_response_handler(
         }
     }
 
-    for (block, transactions_dumped) in recieved_blocks.into_iter().zip(packet.transactions.iter())
+    for (block, transactions_dumped) in received_blocks.into_iter().zip(packet.transactions.iter())
     {
         new_block(
             block,
             transactions_dumped,
             context,
-            socket,
-            recieved_timestamp,
+            &socket.addr,
+            received_timestamp,
         )
         .await?;
     }

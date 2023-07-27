@@ -10,7 +10,7 @@ use tracing::{debug, error};
 pub struct Approves {
     pub total_approves: usize,
     pub peers: HashSet<SocketAddr>,
-    pub last_recieved: usize,
+    pub last_received: usize,
 }
 
 /// Holds new data passed to the node until several verifications
@@ -30,7 +30,7 @@ impl NewData {
         block: MainChainBlockArc,
         transactions: &[Transaction],
         peer: &SocketAddr,
-        time_recieved: usize,
+        time_received: usize,
     ) -> Result<bool, NodeError> {
         let block_hash = block
             .hash()
@@ -47,7 +47,7 @@ impl NewData {
             .and_modify(|approves| {
                 if approves.peers.insert(*peer) {
                     approves.total_approves += 1;
-                    approves.last_recieved = time_recieved;
+                    approves.last_received = time_received;
                 } else {
                     same_peer = true
                 }
@@ -58,7 +58,7 @@ impl NewData {
                 Approves {
                     total_approves: 1,
                     peers: HashSet::from([*peer]),
-                    last_recieved: time_recieved,
+                    last_received: time_received,
                 }
             });
 
