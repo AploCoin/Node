@@ -167,7 +167,7 @@ pub mod packet_models {
     #[serde(tag = "r")]
     pub enum Response {
         Ok(OkResponse),
-        GetNodes(GetNodesReponse),
+        GetNodes(GetNodesResponse),
         GetAmount(GetAmountResponse),
         GetTransaction(GetTransactionResponse),
         Ping(PingResponse),
@@ -190,7 +190,7 @@ pub mod packet_models {
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
-    pub struct GetNodesReponse {
+    pub struct GetNodesResponse {
         pub ipv4: Option<Vec<u8>>,
         pub ipv6: Option<Vec<u8>>,
     }

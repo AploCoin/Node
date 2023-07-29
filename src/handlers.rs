@@ -20,8 +20,9 @@ use crate::{
         bin2addr, dump_addresses,
         packet_models::{
             self, AnnounceRequest, GetAmountRequest, GetBlockByHashRequest,
-            GetBlockByHeightRequest, GetBlocksByHeightsRequest, GetBlocksResponse, GetNodesReponse,
-            GetTransactionRequest, NewBlockRequest, NewTransactionRequest, SubmitPow,
+            GetBlockByHeightRequest, GetBlocksByHeightsRequest, GetBlocksResponse,
+            GetNodesResponse, GetTransactionRequest, NewBlockRequest, NewTransactionRequest,
+            SubmitPow,
         },
         parse_ipv4, NodeContext, ReceivedPacket,
     },
@@ -164,7 +165,7 @@ pub async fn get_nodes_request_handler(
 
     let packet = packet_models::Packet::Response {
         id: received_id,
-        data: packet_models::Response::GetNodes(packet_models::GetNodesReponse { ipv4, ipv6 }),
+        data: packet_models::Response::GetNodes(packet_models::GetNodesResponse { ipv4, ipv6 }),
     };
 
     socket
@@ -625,7 +626,7 @@ pub async fn new_block_request_handler(
 
 pub async fn get_nodes_response_handler(
     context: &NodeContext,
-    packet: &GetNodesReponse,
+    packet: &GetNodesResponse,
 ) -> Result<(), NodeError> {
     if let Some(dump) = &packet.ipv4 {
         let parsed = parse_ipv4(dump).map_err(NodeError::BinToAddress)?;
