@@ -443,7 +443,7 @@ pub async fn handle_peer(
 async fn process_packet(
     socket: &mut TcpStream,
     packet: packet_models::Packet,
-    waiting_response: &mut HashSet<u64>,
+    _waiting_response: &mut HashSet<u64>,
     cipher: &mut ChaCha20,
     peers_mut: Arc<Mutex<HashSet<SocketAddr>>>,
     propagate: &mut Sender<packet_models::Packet>,
@@ -473,7 +473,7 @@ async fn process_packet(
                     new_peers_tx.send(addr)?;
                 }
             }
-            packet_models::Request::get_amount(p) => {}
+            packet_models::Request::get_amount(_p) => {}
             packet_models::Request::get_nodes(p) => {
                 let mut peers_cloned: Box<[SocketAddr]>;
                 {
@@ -499,10 +499,10 @@ async fn process_packet(
                 ));
                 send_packet(socket, cipher, packet).await?;
             }
-            packet_models::Request::get_transaction(p) => {}
+            packet_models::Request::get_transaction(_p) => {}
         },
-        packet_models::Packet::response(r) => {}
-        packet_models::Packet::error(e) => {}
+        packet_models::Packet::response(_r) => {}
+        packet_models::Packet::error(_e) => {}
     }
 
     Ok(())
