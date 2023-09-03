@@ -9,7 +9,6 @@ use blockchaintree::{
     block::{self, MainChainBlock},
     transaction::Transactionable,
 };
-use num_bigint::BigUint;
 use tracing::{debug, error, warn};
 
 use crate::{
