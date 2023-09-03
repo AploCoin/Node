@@ -9,7 +9,6 @@ use blockchaintree::{
     block::{self, MainChainBlock},
     transaction::Transactionable,
 };
-use num_bigint::BigUint;
 use tracing::{debug, error, warn};
 
 use crate::{
@@ -491,14 +490,13 @@ pub async fn submit_pow_request_handler(
     } else if received_timestamp - packet.timestamp > MAX_POW_SUBMIT_DELAY {
         return Err(NodeError::TimestampExpired);
     }
-    let pow = BigUint::from_bytes_be(&packet.pow);
 
     // cannot fail
     let address: [u8; 33] = unsafe { packet.address.clone().try_into().unwrap_unchecked() };
 
     let new_block = context
         .blockchain
-        .emit_main_chain_block(pow, address, packet.timestamp)
+        .emit_main_chain_block(&packet.pow, address, packet.timestamp)
         .await
         .map_err(|e| NodeError::EmitMainChainBlock(e.to_string()))?;
 

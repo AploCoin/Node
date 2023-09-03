@@ -79,6 +79,7 @@ pub mod packet_models {
             }
         }
 
+		#[allow(dead_code)]
         pub fn get_id(&self) -> u64 {
             match self {
                 Packet::Request { id, .. } => *id,

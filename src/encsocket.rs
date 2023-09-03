@@ -163,6 +163,7 @@ impl EncSocket {
         EncSocket::establish_new_connection(stream, addr, timeout).await
     }
 
+	#[allow(dead_code)]
     pub async fn read_exact(&mut self, buffer: &mut [u8]) -> Result<usize, EncSocketError> {
         let mut received_size = 0;
         let mut total_read = 0;
@@ -192,6 +193,7 @@ impl EncSocket {
         Ok(total_read)
     }
 
+	#[allow(dead_code)]
     pub async fn recv_raw(&mut self) -> Result<(usize, Vec<u8>), EncSocketError> {
         // read size of the packet
         let mut recv_buffer = [0u8; 4];
@@ -252,6 +254,7 @@ impl EncSocket {
         Ok(())
     }
 
+	#[allow(dead_code)]
     pub async fn recv<'a, PT: Deserialize<'a>>(&mut self) -> Result<PT, EncSocketError> {
         PT::deserialize(&mut Deserializer::new(Cursor::new(
             self.recv_raw().await?.1,

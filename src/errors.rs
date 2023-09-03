@@ -59,6 +59,7 @@ pub mod node_errors {
         #[error("Error recieving packet from {0:?}: {1:?}")]
         ReceievePacket(SocketAddr, EncSocketError),
 
+		#[allow(dead_code)]
         #[error("Error reading propagation channel {0:?}: {1:?}")]
         PropagationRead(SocketAddr, RecvError),
 
