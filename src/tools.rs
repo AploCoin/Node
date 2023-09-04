@@ -14,6 +14,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast::Sender;
+use tracing::{debug, error};
 
 #[macro_export]
 macro_rules! box_array {
@@ -150,6 +151,10 @@ pub async fn new_block(
         .await
         .map_err(|e| NodeError::AddMainChainBlock(e.to_string()))?
     {
+        debug!(
+            "Block with diverging data {:?}",
+            received_block.hash().unwrap()
+        );
         // diverging data
         // get already existing block from the chain
         let existing_block = context
@@ -178,7 +183,7 @@ pub async fn new_block(
         }
 
         // add block from the chain to the new data
-        if new_data
+        if let Err(e) = new_data
             .new_block(
                 existing_block,
                 &transactions,
@@ -186,8 +191,11 @@ pub async fn new_block(
                 received_timestamp as usize,
             )
             .await
-            .is_err()
         {
+            error!(
+                "Error happened while adding new block to the new data: {:?}",
+                e
+            );
             return Ok(false);
         };
     }
@@ -300,8 +308,12 @@ mod dump_parse_tests {
         //     5050,
         // ));
 
+        // peers.insert(SocketAddr::new(
+        //     std::net::IpAddr::V4(Ipv4Addr::new(192, 168, 1, 57)),
+        //     5050,
+        // ));
         peers.insert(SocketAddr::new(
-            std::net::IpAddr::V4(Ipv4Addr::new(192, 168, 1, 57)),
+            std::net::IpAddr::V4(Ipv4Addr::new(192, 168, 1, 213)),
             5050,
         ));
 
