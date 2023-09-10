@@ -33,3 +33,12 @@ docker run --network host --name aplo_node aplo_node
 ```
 
 ### From source
+1. Update list of packages and install some need packages
+```
+sudo apt update
+sudo apt install -y curl git nano build-essential
+```
+2. Install Rust
+```
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
