@@ -36,9 +36,26 @@ docker run --network host --name aplo_node aplo_node
 1. Update list of packages and install some need packages
 ```
 sudo apt update
-sudo apt install -y curl git nano build-essential
+sudo apt install -y curl git nano build-essential binutils
 ```
 2. Install Rust
 ```
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+3. Clone this repo
+
+```
+git clone https://github.com/AploCoin/Node -b dev node
+```
+4. Edit  .env file.  Replace IP address in the ANNOUNCE_ADDRESS field to your
+```
+ANNOUNCE_ADDRESS="yourIP:5050"
+```
+5. Build node
+```
+cargo build --release
+```
+6. Run node
+```
+cargo run --release
 ```
