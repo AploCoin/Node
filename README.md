@@ -19,6 +19,11 @@ Actual instructions to [install](https://docs.docker.com/engine/install/ubuntu/#
 ```
 git clone https://github.com/AploCoin/Node -b dev node
 ```
-
+4. Edit  .env file.  Replace IP address in the ANNOUNCE_ADDRESS field to your
+```
+ANNOUNCE_ADDRESS="yourIP:5050"
+```
+5. Build the docker container
+``` docker build -t aplo_node:latest .```
 
 ### From source
