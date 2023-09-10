@@ -10,16 +10,14 @@ There is 2 methods of installation:
 sudo apt update
 sudo apt install -y nano mc git curl
 ```
-2. Install Docker from script
+2. Install Docker
 
-```
-docker install
-```
+Actual instructions to [install](https://docs.docker.com/engine/install/ubuntu/#install-using-the-convenience-script) Docker
 
 3. Clone this repo
 
 ```
-git clone... 
+git clone https://github.com/AploCoin/Node -b dev node
 ```
 
 
