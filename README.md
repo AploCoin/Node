@@ -2,7 +2,7 @@
 ## Installation
 There is 2 methods of installation: 
 - Docker (tested on Ubuntu 22.04)
-- From source
+- From source (tested on Ubuntu 18.04, Debian 12, Termux 0.118.0) 
 
 ### Docker
 1. Update list of packages and install some need packages
@@ -24,6 +24,12 @@ git clone https://github.com/AploCoin/Node -b dev node
 ANNOUNCE_ADDRESS="yourIP:5050"
 ```
 5. Build the docker container
-``` docker build -t aplo_node:latest .```
+```
+docker build -t aplo_node:latest .
+```
+6. Run container
+```
+docker run --network host --name aplo_node aplo_node
+```
 
 ### From source
