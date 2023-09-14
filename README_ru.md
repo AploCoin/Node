@@ -34,7 +34,7 @@ mkdir logs
 docker run --network host --name aplo_node -v logs:/Node/logs aplo_node
 ```
 
-### From source
+### Из исходного кода
 1. Обновите список пакетов и установите некоторые необходимые пакеты
 ```
 sudo apt update
