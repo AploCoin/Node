@@ -1,4 +1,5 @@
 # Node
+*  [Переключить на Русский](https://github.com/AploCoin/Node/blob/dev/README_ru.md)
 ## Installation
 There is 2 methods of installation: 
 - Docker (tested on Ubuntu 22.04)
@@ -12,7 +13,7 @@ sudo apt install -y nano mc git curl
 ```
 2. Install Docker
 
-Actual instructions to [install](https://docs.docker.com/engine/install/ubuntu/#install-using-the-convenience-script) Docker
+Actual instructions to [install](https://docs.docker.com/engine/install/ubuntu/) Docker
 
 3. Clone this repo
 
