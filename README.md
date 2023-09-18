@@ -31,7 +31,7 @@ docker build -t aplo_node:latest .
 6. Run container
 ```
 mkdir logs
-docker run --network host --name aplo_node -v logs:/Node/logs aplo_node
+docker run --network host --name aplo_node -v $(pwd)/logs:/Node/logs aplo_node
 ```
 
 ### From source
