@@ -6,7 +6,7 @@ There is 2 methods of installation:
 - From source (tested on Ubuntu 18.04, Debian 12, Termux 0.118.0) 
 
 ### Docker
-1. Update list of packages and install some need packages
+1. Update list of packages and install some needed packages
 ```
 sudo apt update
 sudo apt install -y nano mc git curl
@@ -35,7 +35,7 @@ docker run --network host --name aplo_node -v $(pwd)/logs:/Node/logs aplo_node
 ```
 
 ### From source
-1. Update list of packages and install some need packages
+1. Update list of packages and install some needed packages
 ```
 sudo apt update
 sudo apt install -y curl git nano build-essential binutils
