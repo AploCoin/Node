@@ -9,7 +9,7 @@ There is 2 methods of installation:
 1. Update list of packages and install some needed packages
 ```
 sudo apt update
-sudo apt install -y nano mc git curl
+sudo apt install -y nano git curl
 ```
 2. Install Docker
 
