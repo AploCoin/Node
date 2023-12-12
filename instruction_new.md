@@ -57,3 +57,34 @@ cargo build --release
 ```
 cargo run --release
 ```
+
+
+### Docker
+#### Debian/Ubuntu
+1. Update list of packages and install some needed packages
+```
+sudo apt update
+sudo apt install -y nano git curl
+```
+2. Install Docker
+
+Actual instructions to [install](https://docs.docker.com/engine/install/ubuntu/) Docker
+
+3. Clone this repo
+
+```
+git clone https://github.com/AploCoin/Node -b dev node
+```
+4. Edit  .env file.  Replace IP address in the ANNOUNCE_ADDRESS field to yours
+```
+ANNOUNCE_ADDRESS="yourIP:5050"
+```
+5. Build the docker container
+```
+docker build -t aplo_node:latest .
+```
+6. Run container
+```
+mkdir logs
+docker run --network host --name aplo_node -v $(pwd)/logs:/Node/logs aplo_node
+```
